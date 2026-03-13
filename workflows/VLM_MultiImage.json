@@ -1,0 +1,107 @@
+{
+  "last_node_id": 6,
+  "last_link_id": 6,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "pos": {"0": 40, "1": 40},
+      "size": {"0": 315, "1": 314},
+      "flags": {}, "order": 0, "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE",  "links": [1], "shape": 3},
+        {"name": "MASK",  "type": "MASK",   "links": null, "shape": 3}
+      ],
+      "properties": {"Node name for S&R": "LoadImage"},
+      "widgets_values": ["image1.png", "image"]
+    },
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "pos": {"0": 40, "1": 410},
+      "size": {"0": 315, "1": 314},
+      "flags": {}, "order": 1, "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE",  "links": [2], "shape": 3},
+        {"name": "MASK",  "type": "MASK",   "links": null, "shape": 3}
+      ],
+      "properties": {"Node name for S&R": "LoadImage"},
+      "widgets_values": ["image2.png", "image"]
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": {"0": 40, "1": 780},
+      "size": {"0": 315, "1": 314},
+      "flags": {}, "order": 2, "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE",  "links": [3], "shape": 3},
+        {"name": "MASK",  "type": "MASK",   "links": null, "shape": 3}
+      ],
+      "properties": {"Node name for S&R": "LoadImage"},
+      "widgets_values": ["image3.png", "image"]
+    },
+    {
+      "id": 4,
+      "type": "MfluxVLMLoader",
+      "pos": {"0": 40, "1": 1140},
+      "size": {"0": 315, "1": 80},
+      "flags": {}, "order": 3, "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "vlm_model", "type": "MLXVLM_MODEL", "links": [4], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "MfluxVLMLoader"},
+      "widgets_values": ["mlx-community/Qwen2-VL-2B-Instruct-4bit", ""]
+    },
+    {
+      "id": 5,
+      "type": "MfluxVLMRunMulti",
+      "pos": {"0": 400, "1": 300},
+      "size": {"0": 400, "1": 340},
+      "flags": {}, "order": 4, "mode": 0,
+      "inputs": [
+        {"name": "vlm_model", "type": "MLXVLM_MODEL", "link": 4},
+        {"name": "image1",    "type": "IMAGE",         "link": 1},
+        {"name": "image2",    "type": "IMAGE",         "link": 2},
+        {"name": "image3",    "type": "IMAGE",         "link": 3}
+      ],
+      "outputs": [
+        {"name": "caption", "type": "STRING", "links": [6], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "MfluxVLMRunMulti"},
+      "widgets_values": [
+        "more_detailed_caption",
+        "Detailed Caption (for img2img)",
+        500, 0.0,
+        "Compare these images and describe their similarities and differences."
+      ]
+    },
+    {
+      "id": 6,
+      "type": "ShowText|pysssss",
+      "pos": {"0": 860, "1": 300},
+      "size": {"0": 420, "1": 300},
+      "flags": {}, "order": 5, "mode": 0,
+      "inputs": [
+        {"name": "text", "type": "STRING", "link": 6, "widget": {"name": "text"}}
+      ],
+      "outputs": [{"name": "STRING", "type": "STRING", "links": null}],
+      "properties": {"Node name for S&R": "ShowText|pysssss"},
+      "widgets_values": [""]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 5, 1, "IMAGE"],
+    [2, 2, 0, 5, 2, "IMAGE"],
+    [3, 3, 0, 5, 3, "IMAGE"],
+    [4, 4, 0, 5, 0, "MLXVLM_MODEL"],
+    [6, 5, 0, 6, 0, "STRING"]
+  ],
+  "groups": [], "config": {},
+  "extra": {"ds": {"scale": 1.0, "offset": [0, 0]}},
+  "version": 0.4
+}
