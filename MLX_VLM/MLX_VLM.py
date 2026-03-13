@@ -363,3 +363,85 @@ class MfluxVLMRunMulti:
                     os.unlink(p)
                 except Exception:
                     pass
+
+
+# ---------------------------------------------------------------------------
+# Node: MfluxVLMConverter
+# Quantisiert ein HuggingFace-Modell und speichert es lokal –
+# analog zu MfluxCustomModels in mflux-comfyui-2
+# Ruft `python -m mlx_vlm.convert` als Subprozess auf
+# ---------------------------------------------------------------------------
+import sys
+import subprocess
+
+QUANTIZE_BITS = ["4", "8", "3", "6"]
+
+
+class MfluxVLMConverter:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "hf_model": ("STRING", {
+                    "default": "microsoft/Florence-2-large",
+                    "tooltip": "HuggingFace repo ID (z.B. 'Qwen/Qwen2.5-VL-3B-Instruct') oder lokaler Pfad (z.B. '/Volumes/KI/models/Florence-2-large').",
+                }),
+                "output_path": ("STRING", {
+                    "default": "~/models/",
+                    "tooltip": "Lokaler Zielordner. Der Modellname wird automatisch angehängt, z.B. ~/models/Florence-2-large-4bit.",
+                }),
+                "q_bits": (QUANTIZE_BITS, {
+                    "default": "4",
+                    "tooltip": "Quantisierungstiefe in Bit. 4-bit empfohlen für maximale Kompression, 8-bit für höhere Qualität.",
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("saved_path",)
+    CATEGORY = "MFlux/VLM"
+    FUNCTION = "convert"
+    OUTPUT_NODE = True
+
+    def convert(self, hf_model, output_path, q_bits):
+        if not HAS_VLM:
+            raise RuntimeError("mlx-vlm is not installed. Run: pip install mlx-vlm")
+
+        hf_model = hf_model.strip()
+        output_path = output_path.strip()
+
+        if not hf_model:
+            raise ValueError("hf_model darf nicht leer sein.")
+        if not output_path:
+            raise ValueError("output_path darf nicht leer sein.")
+
+        # Zielpfad zusammenbauen: ~/models/ + "Florence-2-large-4bit"
+        model_name = hf_model.split("/")[-1]
+        save_name = f"{model_name}-{q_bits}bit"
+        save_path = os.path.join(os.path.expanduser(output_path), save_name)
+
+        print(f"[MfluxVLM] Converting '{hf_model}' → '{save_path}' ({q_bits}-bit) ...")
+
+        cmd = [
+            sys.executable, "-m", "mlx_vlm.convert",
+            "--hf-path",  hf_model,
+            "--mlx-path", save_path,
+            "--quantize",
+            "--q-bits",   q_bits,
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=False,   # Output live im ComfyUI-Terminal sichtbar
+                text=True,
+                check=True,
+            )
+            print(f"[MfluxVLM] Conversion complete. Model saved to: {save_path}")
+            return (save_path,)
+
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"mlx_vlm.convert failed (exit {e.returncode}). "
+                f"Check the ComfyUI terminal for details."
+            ) from e

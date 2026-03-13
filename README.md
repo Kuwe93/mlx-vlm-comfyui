@@ -45,6 +45,7 @@ All nodes can be found by double-clicking the canvas and searching for **"MLX VL
 | **MLX VLM Loader** | Loads a VLM model from mlx-community or a custom HuggingFace repo / local path. Auto-detects Florence2 models. |
 | **MLX VLM Run** | Analyzes an image and returns a text string. Florence2: `task` dropdown with `<TASK>` syntax. Other VLMs: `preset` dropdown with free-text prompts. |
 | **MLX VLM Run (Multi-Image)** | Like MLX VLM Run, but accepts up to 3 images simultaneously. |
+| **MLX VLM Converter** | Downloads a HuggingFace VLM model, quantizes it (3/4/6/8-bit) and saves it locally. The saved path can be used directly in MLX VLM Loader via `custom_model_path`. |
 
 ---
 
