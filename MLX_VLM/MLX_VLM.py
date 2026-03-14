@@ -445,3 +445,151 @@ class MfluxVLMConverter:
                 f"mlx_vlm.convert failed (exit {e.returncode}). "
                 f"Check the ComfyUI terminal for details."
             ) from e
+
+
+# ---------------------------------------------------------------------------
+# Node: MfluxVLMBatchCaption
+# Beschreibt alle Bilder in einem Ordner und speichert je eine .txt Datei
+# mit demselben Namen wie das Bild. Bereits vorhandene .txt werden übersprungen
+# (oder überschrieben, je nach overwrite-Flag).
+# ---------------------------------------------------------------------------
+SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
+if HAS_VLM:
+    class MfluxVLMBatchCaption:
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "vlm_model": ("MLXVLM_MODEL",),
+                    "image_folder": ("STRING", {
+                        "default": "/path/to/training/images",
+                        "tooltip": "Ordner mit Trainingsbildern. Für jedes Bild wird eine "
+                                   "gleichnamige .txt Datei erstellt.",
+                    }),
+                    "task": (FLORENCE2_TASKS, {
+                        "default": "more_detailed_caption",
+                        "tooltip": "Florence2 Task. Nur aktiv bei Florence2-Modellen.",
+                    }),
+                    "preset": (GENERAL_PRESETS, {
+                        "default": "Detailed Caption (for img2img)",
+                        "tooltip": "Prompt-Preset für Qwen2-VL usw. Wird bei Florence2 ignoriert.",
+                    }),
+                    "max_tokens":  ("INT",   {"default": 300, "min": 50, "max": 2000, "step": 50}),
+                    "temperature": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05}),
+                    "trigger_token": ("STRING", {
+                        "default": "",
+                        "tooltip": "Wird VOR jede generierte Beschreibung gesetzt. "
+                                   "z.B. 'ohwx person' für LoRA-Training. Leer = kein Prefix.",
+                    }),
+                    "overwrite": ("BOOLEAN", {
+                        "default": False,
+                        "label_on": "True", "label_off": "False",
+                        "tooltip": "True = vorhandene .txt Dateien überschreiben. "
+                                   "False = bereits beschriftete Bilder überspringen.",
+                    }),
+                },
+                "optional": {
+                    "custom_prompt": ("STRING", {
+                        "multiline": True,
+                        "default": "",
+                        "tooltip": "Überschreibt Preset komplett (nur für Nicht-Florence2-Modelle).",
+                    }),
+                },
+            }
+
+        RETURN_TYPES = ("STRING", "INT",   "INT")
+        RETURN_NAMES = ("summary", "processed", "skipped")
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "run_batch"
+        OUTPUT_NODE  = True
+
+        def run_batch(self, vlm_model, image_folder, task, preset,
+                      max_tokens, temperature, trigger_token, overwrite,
+                      custom_prompt=""):
+            if not HAS_VLM:
+                raise RuntimeError("mlx-vlm not installed. Run: pip install mlx-vlm")
+
+            folder = os.path.expanduser(image_folder.strip())
+            if not os.path.isdir(folder):
+                raise ValueError(f"[VLMBatch] Ordner nicht gefunden: {folder}")
+
+            # Alle Bilddateien sammeln (keine preview*.* Dateien)
+            image_files = sorted([
+                f for f in os.listdir(folder)
+                if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
+                and not os.path.splitext(f)[0].lower().startswith("preview")
+            ])
+
+            if not image_files:
+                raise ValueError(f"[VLMBatch] Keine Bilddateien gefunden in: {folder}")
+
+            print(f"[VLMBatch] {len(image_files)} Bilder gefunden in: {folder}")
+
+            model, processor, config = vlm_model.get()
+
+            # Prompt bestimmen (einmal für alle Bilder)
+            if vlm_model.is_florence2:
+                task_token = FLORENCE2_TASK_MAP.get(task, "<MORE_DETAILED_CAPTION>")
+                prompt = task_token
+            else:
+                if custom_prompt and custom_prompt.strip():
+                    prompt = custom_prompt.strip()
+                else:
+                    prompt = GENERAL_PRESET_MAP.get(preset, "Describe this image in detail.")
+
+            trigger = trigger_token.strip()
+            processed = 0
+            skipped   = 0
+            results   = []
+
+            for fname in image_files:
+                img_path = os.path.join(folder, fname)
+                base     = os.path.splitext(fname)[0]
+                txt_path = os.path.join(folder, base + ".txt")
+
+                # Überspringen wenn bereits vorhanden und overwrite=False
+                if os.path.exists(txt_path) and not overwrite:
+                    print(f"[VLMBatch] Überspringe (bereits vorhanden): {fname}")
+                    skipped += 1
+                    continue
+
+                print(f"[VLMBatch] Beschreibe [{processed + skipped + 1}/{len(image_files)}]: {fname}")
+
+                try:
+                    formatted_prompt = apply_chat_template(
+                        processor, config, prompt, num_images=1
+                    )
+                    output = generate(
+                        model, processor, formatted_prompt,
+                        [img_path],
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        verbose=False,
+                    )
+                    caption = output.strip()
+
+                    # Trigger-Token voranstellen
+                    if trigger:
+                        caption = f"{trigger}, {caption}"
+
+                    # .txt speichern
+                    with open(txt_path, "w", encoding="utf-8") as f:
+                        f.write(caption)
+
+                    print(f"[VLMBatch]   → {caption[:80]}{'...' if len(caption) > 80 else ''}")
+                    results.append(f"{fname}: {caption[:60]}...")
+                    processed += 1
+
+                except Exception as e:
+                    print(f"[VLMBatch] FEHLER bei {fname}: {e}")
+                    results.append(f"{fname}: FEHLER – {e}")
+
+            summary = (
+                f"Batch abgeschlossen: {processed} beschriftet, {skipped} übersprungen.\n"
+                f"Ordner: {folder}\n\n"
+                + "\n".join(results[:20])
+                + ("\n..." if len(results) > 20 else "")
+            )
+            print(f"[VLMBatch] {summary}")
+            return (summary, processed, skipped)
