@@ -506,6 +506,12 @@ if HAS_VLM:
                         "tooltip": "True = vorhandene .txt Dateien überschreiben. "
                                    "False = bereits beschriftete Bilder überspringen.",
                     }),
+                    "reload_every": ("INT", {
+                        "default": 10, "min": 1, "max": 100,
+                        "tooltip": "Modell alle N Bilder neu laden um Repetition durch "
+                                   "akkumulierten KV-Cache zu vermeiden. "
+                                   "Kleinere Werte = stabiler aber langsamer.",
+                    }),
                 },
                 "optional": {
                     "custom_prompt": ("STRING", {
@@ -524,7 +530,7 @@ if HAS_VLM:
 
         def run_batch(self, vlm_model, image_folder, task, preset,
                       max_tokens, temperature, trigger_token, overwrite,
-                      custom_prompt=""):
+                      reload_every=10, custom_prompt=""):
             if not HAS_VLM:
                 raise RuntimeError("mlx-vlm not installed. Run: pip install mlx-vlm")
 
@@ -560,6 +566,7 @@ if HAS_VLM:
             processed = 0
             skipped   = 0
             results   = []
+            _processed_since_reload = 0
 
             for fname in image_files:
                 img_path = os.path.join(folder, fname)
@@ -573,6 +580,13 @@ if HAS_VLM:
                     continue
 
                 print(f"[VLMBatch] Beschreibe [{processed + skipped + 1}/{len(image_files)}]: {fname}")
+
+                # Modell periodisch neu laden um KV-Cache Repetition zu vermeiden
+                if _processed_since_reload > 0 and _processed_since_reload % reload_every == 0:
+                    print(f"[VLMBatch] Lade Modell neu (nach {reload_every} Bildern) ...")
+                    vlm_model._model = None  # Cache löschen → lazy reload beim nächsten .get()
+                    model, processor, config = vlm_model.get()
+                    print(f"[VLMBatch] Modell neu geladen.")
 
                 try:
                     formatted_prompt = apply_chat_template(
@@ -598,6 +612,7 @@ if HAS_VLM:
                     print(f"[VLMBatch]   → {caption[:80]}{'...' if len(caption) > 80 else ''}")
                     results.append(f"{fname}: {caption[:60]}...")
                     processed += 1
+                    _processed_since_reload += 1
 
                 except Exception as e:
                     print(f"[VLMBatch] FEHLER bei {fname}: {e}")
