@@ -18,6 +18,24 @@ except ImportError:
           "Install with: pip install mlx-vlm")
 
 # ---------------------------------------------------------------------------
+# Hilfsfunktion: generate()-Output normalisieren
+# mlx-vlm >= 0.3.x gibt GenerationResult zurück, ältere Versionen einen String
+# ---------------------------------------------------------------------------
+def _extract_text(output) -> str:
+    """Extrahiert den Text aus mlx-vlm generate() Output unabhängig vom Typ."""
+    if isinstance(output, str):
+        return output.strip()
+    # GenerationResult oder ähnliches Objekt
+    for attr in ("text", "generated_text", "content", "output"):
+        if hasattr(output, attr):
+            val = getattr(output, attr)
+            if isinstance(val, str):
+                return val.strip()
+    # Fallback: str() Konvertierung
+    return str(output).strip()
+
+
+# ---------------------------------------------------------------------------
 # Bekannte mlx-community Modelle für das Dropdown
 # ---------------------------------------------------------------------------
 VLM_MODELS = [
@@ -275,7 +293,7 @@ class MfluxVLMRun:
                 verbose=False,
             )
 
-            result = output.strip()
+            result = _extract_text(output)
             print(f"[MfluxVLM] Result: {result[:120]}{'...' if len(result) > 120 else ''}")
             return (result,)
 
@@ -355,7 +373,7 @@ class MfluxVLMRunMulti:
                 verbose=False,
             )
 
-            return (output.strip(),)
+            return (_extract_text(output),)
 
         finally:
             for p in image_paths:
@@ -567,7 +585,7 @@ if HAS_VLM:
                         temperature=temperature,
                         verbose=False,
                     )
-                    caption = output.strip()
+                    caption = _extract_text(output)
 
                     # Trigger-Token voranstellen
                     if trigger:
