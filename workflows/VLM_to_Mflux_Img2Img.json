@@ -5,102 +5,323 @@
     {
       "id": 1,
       "type": "LoadImage",
-      "pos": {"0": 40, "1": 60},
-      "size": {"0": 315, "1": 314},
-      "flags": {}, "order": 0, "mode": 0,
+      "pos": {
+        "0": 40,
+        "1": 60
+      },
+      "size": {
+        "0": 315,
+        "1": 314
+      },
+      "flags": {},
+      "order": 0,
+      "mode": 0,
       "inputs": [],
       "outputs": [
-        {"name": "IMAGE", "type": "IMAGE",  "links": [1, 5], "shape": 3},
-        {"name": "MASK",  "type": "MASK",   "links": null,   "shape": 3}
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1,
+            5
+          ],
+          "shape": 3
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "shape": 3
+        }
       ],
-      "properties": {"Node name for S&R": "LoadImage"},
-      "widgets_values": ["example.png", "image"]
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ]
     },
     {
       "id": 2,
       "type": "MfluxVLMLoader",
-      "pos": {"0": 40, "1": 430},
-      "size": {"0": 315, "1": 80},
-      "flags": {}, "order": 1, "mode": 0,
+      "pos": {
+        "0": 40,
+        "1": 430
+      },
+      "size": {
+        "0": 315,
+        "1": 80
+      },
+      "flags": {},
+      "order": 1,
+      "mode": 0,
       "inputs": [],
       "outputs": [
-        {"name": "vlm_model", "type": "MLXVLM_MODEL", "links": [2], "slot_index": 0}
+        {
+          "name": "vlm_model",
+          "type": "MLXVLM_MODEL",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        }
       ],
-      "properties": {"Node name for S&R": "MfluxVLMLoader"},
-      "widgets_values": ["mlx-community/Qwen2-VL-2B-Instruct-4bit", ""]
+      "properties": {
+        "Node name for S&R": "MfluxVLMLoader"
+      },
+      "widgets_values": [
+        "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+        ""
+      ]
     },
     {
       "id": 3,
       "type": "MfluxVLMRun",
-      "pos": {"0": 400, "1": 60},
-      "size": {"0": 380, "1": 280},
-      "flags": {}, "order": 2, "mode": 0,
+      "pos": {
+        "0": 400,
+        "1": 60
+      },
+      "size": {
+        "0": 380,
+        "1": 280
+      },
+      "flags": {},
+      "order": 2,
+      "mode": 0,
       "inputs": [
-        {"name": "vlm_model", "type": "MLXVLM_MODEL", "link": 2},
-        {"name": "image",     "type": "IMAGE",         "link": 1}
+        {
+          "name": "vlm_model",
+          "type": "MLXVLM_MODEL",
+          "link": 2
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 1
+        }
       ],
       "outputs": [
-        {"name": "caption", "type": "STRING", "links": [3], "slot_index": 0}
+        {
+          "name": "caption",
+          "type": "STRING",
+          "links": [
+            3
+          ],
+          "slot_index": 0
+        }
       ],
-      "properties": {"Node name for S&R": "MfluxVLMRun"},
-      "widgets_values": ["more_detailed_caption", "Detailed Caption (for img2img)", 300, 0.0, ""]
+      "properties": {
+        "Node name for S&R": "MfluxVLMRun"
+      },
+      "widgets_values": [
+        "more_detailed_caption",
+        "Detailed Caption (for img2img)",
+        300,
+        0.0,
+        ""
+      ]
     },
     {
       "id": 5,
       "type": "MfluxImg2Img",
-      "pos": {"0": 400, "1": 400},
-      "size": {"0": 380, "1": 130},
-      "flags": {}, "order": 3, "mode": 0,
+      "pos": {
+        "0": 400,
+        "1": 400
+      },
+      "size": {
+        "0": 380,
+        "1": 130
+      },
+      "flags": {},
+      "order": 3,
+      "mode": 0,
       "inputs": [
-        {"name": "image_tensor", "type": "IMAGE", "link": 5}
+        {
+          "name": "image_tensor",
+          "type": "IMAGE",
+          "link": 5
+        }
       ],
       "outputs": [
-        {"name": "img2img", "type": "MfluxImg2ImgPipeline", "links": [6], "slot_index": 0}
+        {
+          "name": "img2img",
+          "type": "MfluxImg2ImgPipeline",
+          "links": [
+            6
+          ],
+          "slot_index": 0
+        }
       ],
-      "properties": {"Node name for S&R": "MfluxImg2Img"},
-      "widgets_values": ["", 0.6]
+      "properties": {
+        "Node name for S&R": "MfluxImg2Img"
+      },
+      "widgets_values": [
+        "",
+        0.6
+      ]
     },
     {
       "id": 4,
       "type": "QuickMfluxNode",
-      "pos": {"0": 830, "1": 60},
-      "size": {"0": 400, "1": 370},
-      "flags": {}, "order": 4, "mode": 0,
+      "pos": {
+        "0": 830,
+        "1": 60
+      },
+      "size": {
+        "0": 400,
+        "1": 370
+      },
+      "flags": {},
+      "order": 4,
+      "mode": 0,
       "inputs": [
-        {"name": "Local_model", "type": "PATH",                    "link": null},
-        {"name": "Loras",       "type": "MfluxLorasPipeline",      "link": null},
-        {"name": "img2img",     "type": "MfluxImg2ImgPipeline",    "link": 6},
-        {"name": "ControlNet",  "type": "MfluxControlNetPipeline", "link": null},
-        {"name": "prompt",      "type": "STRING",                  "link": 3,
-         "widget": {"name": "prompt"}}
+        {
+          "name": "Local_model",
+          "type": "PATH",
+          "link": null
+        },
+        {
+          "name": "Loras",
+          "type": "MfluxLorasPipeline",
+          "link": null
+        },
+        {
+          "name": "img2img",
+          "type": "MfluxImg2ImgPipeline",
+          "link": 6
+        },
+        {
+          "name": "ControlNet",
+          "type": "MfluxControlNetPipeline",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": 3,
+          "widget": {
+            "name": "prompt"
+          }
+        }
       ],
       "outputs": [
-        {"name": "IMAGE", "type": "IMAGE", "links": [7], "slot_index": 0}
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            7
+          ],
+          "slot_index": 0
+        }
       ],
-      "properties": {"Node name for S&R": "QuickMfluxNode"},
-      "widgets_values": ["", "dev", "4", -1, 1024, 1024, 20, 3.5, true]
+      "properties": {
+        "Node name for S&R": "QuickMfluxNode"
+      },
+      "widgets_values": [
+        "",
+        "dev",
+        "4",
+        -1,
+        1024,
+        1024,
+        20,
+        3.5,
+        true,
+        "",
+        false,
+        0.0,
+        ""
+      ]
     },
     {
       "id": 6,
       "type": "PreviewImage",
-      "pos": {"0": 1280, "1": 60},
-      "size": {"0": 280, "1": 280},
-      "flags": {}, "order": 5, "mode": 0,
-      "inputs": [{"name": "images", "type": "IMAGE", "link": 7}],
+      "pos": {
+        "0": 1280,
+        "1": 60
+      },
+      "size": {
+        "0": 280,
+        "1": 280
+      },
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 7
+        }
+      ],
       "outputs": [],
-      "properties": {"Node name for S&R": "PreviewImage"},
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
       "widgets_values": []
     }
   ],
   "links": [
-    [1, 1, 0, 3, 1, "IMAGE"],
-    [2, 2, 0, 3, 0, "MLXVLM_MODEL"],
-    [3, 3, 0, 4, 4, "STRING"],
-    [5, 1, 0, 5, 0, "IMAGE"],
-    [6, 5, 0, 4, 2, "MfluxImg2ImgPipeline"],
-    [7, 4, 0, 6, 0, "IMAGE"]
+    [
+      1,
+      1,
+      0,
+      3,
+      1,
+      "IMAGE"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      0,
+      "MLXVLM_MODEL"
+    ],
+    [
+      3,
+      3,
+      0,
+      4,
+      4,
+      "STRING"
+    ],
+    [
+      5,
+      1,
+      0,
+      5,
+      0,
+      "IMAGE"
+    ],
+    [
+      6,
+      5,
+      0,
+      4,
+      2,
+      "MfluxImg2ImgPipeline"
+    ],
+    [
+      7,
+      4,
+      0,
+      6,
+      0,
+      "IMAGE"
+    ]
   ],
-  "groups": [], "config": {},
-  "extra": {"ds": {"scale": 1.0, "offset": [0, 0]}},
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 1.0,
+      "offset": [
+        0,
+        0
+      ]
+    }
+  },
   "version": 0.4
 }
