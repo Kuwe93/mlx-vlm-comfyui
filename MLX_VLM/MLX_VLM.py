@@ -809,6 +809,8 @@ if HAS_VLM:
                     }),
                     "reload_every": ("INT", {"default": 5, "min": 1, "max": 50,
                                     "tooltip": "Modell alle N Bilder neu laden gegen Repetition."}),
+                },
+                "optional": {
                     "thinking_budget": ("INT", {
                         "default": 0, "min": -1, "max": 2000, "step": 10,
                         "tooltip": (
@@ -827,8 +829,6 @@ if HAS_VLM:
                             "nach dem Reasoning noch Platz hat."
                         ),
                     }),
-                },
-                "optional": {
                     "fallback_model_path": ("STRING", {
                         "default": "",
                         "tooltip": "HuggingFace Repo oder lokaler Pfad eines zweiten Modells "
