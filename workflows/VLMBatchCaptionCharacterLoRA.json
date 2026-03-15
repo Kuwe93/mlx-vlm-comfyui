@@ -11,14 +11,14 @@
       ],
       "size": [
         500,
-        120
+        110
       ],
       "flags": {},
       "order": 0,
       "mode": 0,
       "title": "Anleitung",
       "widgets_values": [
-        "VLM Batch Caption – Alle Bilder eines Ordners beschriften\n\n1. Modell wählen (Qwen2.5-VL-3B empfohlen für Portraits)\n2. image_folder auf deinen Trainingsordner setzen\n3. trigger_token setzen z.B. 'ohwx person'\n4. Queue Prompt – für jedes Bild wird eine .txt erstellt\n\nDateibenennung: 01.jpg → 01.txt, portrait_02.png → portrait_02.txt"
+        "VLM Batch Caption fuer LoRA-Training\n\n1. image_folder auf deinen Trainingsordner setzen\n2. character_name = Trigger-Token (z.B. 'ohwx person')\n3. Optional: custom_prompt mit {CHARACTER} Platzhalter\n4. Queue Prompt - fuer jedes Bild wird eine .txt erstellt"
       ],
       "inputs": [],
       "outputs": [],
@@ -31,7 +31,7 @@
       "type": "MfluxVLMLoader",
       "pos": [
         20,
-        160
+        150
       ],
       "size": [
         380,
@@ -62,25 +62,24 @@
     },
     {
       "id": 3,
-      "type": "MfluxVLMBatchCaption",
+      "type": "VLMBatchCaptionCharacterLoRA",
       "pos": [
         440,
-        160
+        150
       ],
       "size": [
         420,
-        380
+        320
       ],
       "flags": {},
       "order": 2,
       "mode": 0,
-      "title": "Batch Caption (allgemein)",
+      "title": "Batch Caption (LoRA)",
       "widgets_values": [
-        "/path/to/images",
-        "more_detailed_caption",
-        "Detailed Caption (for img2img)",
-        300,
-        0.0,
+        "/path/to/training/images",
+        "ohwx person",
+        150,
+        0.1,
         false,
         10,
         ""
@@ -114,7 +113,7 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "MfluxVLMBatchCaption"
+        "Node name for S&R": "VLMBatchCaptionCharacterLoRA"
       }
     }
   ],

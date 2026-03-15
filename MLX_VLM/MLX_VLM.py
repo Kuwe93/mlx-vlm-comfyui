@@ -465,13 +465,60 @@ class MfluxVLMConverter:
             ) from e
 
 
-# ---------------------------------------------------------------------------
-# Node: MfluxVLMBatchCaption
-# Beschreibt alle Bilder in einem Ordner und speichert je eine .txt Datei
-# mit demselben Namen wie das Bild. Bereits vorhandene .txt werden übersprungen
-# (oder überschrieben, je nach overwrite-Flag).
-# ---------------------------------------------------------------------------
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
+def _vlm_batch_run(tag, vlm_model, folder, prompt, trigger,
+                   max_tokens, temperature, overwrite, reload_every):
+    image_files = sorted([
+        f for f in os.listdir(folder)
+        if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
+        and not os.path.splitext(f)[0].lower().startswith("preview")
+    ])
+    if not image_files:
+        raise ValueError(f"[{tag}] Keine Bilddateien gefunden in: {folder}")
+    print(f"[{tag}] {len(image_files)} Bilder gefunden in: {folder}")
+    model, processor, config = vlm_model.get()
+    processed = 0
+    skipped   = 0
+    results   = []
+    since_reload = 0
+    for fname in image_files:
+        img_path = os.path.join(folder, fname)
+        base     = os.path.splitext(fname)[0]
+        txt_path = os.path.join(folder, base + ".txt")
+        if os.path.exists(txt_path) and not overwrite:
+            print(f"[{tag}] Ueberspringe: {fname}")
+            skipped += 1
+            continue
+        print(f"[{tag}] [{processed + skipped + 1}/{len(image_files)}]: {fname}")
+        if since_reload > 0 and since_reload % reload_every == 0:
+            print(f"[{tag}] Lade Modell neu ...")
+            vlm_model._model = None
+            model, processor, config = vlm_model.get()
+        try:
+            fp = apply_chat_template(processor, config, prompt, num_images=1)
+            out = generate(model, processor, fp, [img_path],
+                           max_tokens=max_tokens, temperature=temperature, verbose=False)
+            caption = _extract_text(out)
+            if trigger:
+                caption = trigger + ", " + caption
+            with open(txt_path, "w", encoding="utf-8") as fh:
+                fh.write(caption)
+            print(f"[{tag}]   -> {caption[:80]}")
+            results.append(fname + ": " + caption[:60] + "...")
+            processed += 1
+            since_reload += 1
+        except Exception as e:
+            print(f"[{tag}] FEHLER bei {fname}: {e}")
+            results.append(fname + ": FEHLER - " + str(e))
+    summary_lines = [
+        "Batch: " + str(processed) + " beschriftet, " + str(skipped) + " uebersprungen.",
+        "Ordner: " + folder, "",
+    ] + results[:20] + (["..."] if len(results) > 20 else [])
+    summary = "\n".join(summary_lines)
+    print(f"[{tag}] Fertig.")
+    return (summary, processed, skipped)
+
 
 if HAS_VLM:
     class MfluxVLMBatchCaption:
@@ -479,150 +526,96 @@ if HAS_VLM:
         def INPUT_TYPES(cls):
             return {
                 "required": {
-                    "vlm_model": ("MLXVLM_MODEL",),
-                    "image_folder": ("STRING", {
-                        "default": "/path/to/training/images",
-                        "tooltip": "Ordner mit Trainingsbildern. Für jedes Bild wird eine "
-                                   "gleichnamige .txt Datei erstellt.",
-                    }),
-                    "task": (FLORENCE2_TASKS, {
-                        "default": "more_detailed_caption",
-                        "tooltip": "Florence2 Task. Nur aktiv bei Florence2-Modellen.",
-                    }),
-                    "preset": (GENERAL_PRESETS, {
-                        "default": "Detailed Caption (for img2img)",
-                        "tooltip": "Prompt-Preset für Qwen2-VL usw. Wird bei Florence2 ignoriert.",
-                    }),
-                    "max_tokens":  ("INT",   {"default": 300, "min": 50, "max": 2000, "step": 50}),
-                    "temperature": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05}),
-                    "trigger_token": ("STRING", {
-                        "default": "",
-                        "tooltip": "Wird VOR jede generierte Beschreibung gesetzt. "
-                                   "z.B. 'ohwx person' für LoRA-Training. Leer = kein Prefix.",
-                    }),
-                    "overwrite": ("BOOLEAN", {
-                        "default": False,
-                        "label_on": "True", "label_off": "False",
-                        "tooltip": "True = vorhandene .txt Dateien überschreiben. "
-                                   "False = bereits beschriftete Bilder überspringen.",
-                    }),
-                    "reload_every": ("INT", {
-                        "default": 10, "min": 1, "max": 100,
-                        "tooltip": "Modell alle N Bilder neu laden um Repetition durch "
-                                   "akkumulierten KV-Cache zu vermeiden. "
-                                   "Kleinere Werte = stabiler aber langsamer.",
-                    }),
+                    "vlm_model":    ("MLXVLM_MODEL",),
+                    "image_folder": ("STRING", {"default": "/path/to/images"}),
+                    "task":    (FLORENCE2_TASKS,  {"default": "more_detailed_caption"}),
+                    "preset":  (GENERAL_PRESETS,  {"default": "Detailed Caption (for img2img)"}),
+                    "max_tokens":   ("INT",   {"default": 300, "min": 50, "max": 2000, "step": 50}),
+                    "temperature":  ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05}),
+                    "overwrite":    ("BOOLEAN", {"default": False, "label_on": "True", "label_off": "False"}),
+                    "reload_every": ("INT", {"default": 10, "min": 1, "max": 100}),
                 },
                 "optional": {
-                    "custom_prompt": ("STRING", {
-                        "multiline": True,
-                        "default": "",
-                        "tooltip": "Überschreibt Preset komplett (nur für Nicht-Florence2-Modelle).",
-                    }),
+                    "custom_prompt": ("STRING", {"multiline": True, "default": ""}),
                 },
             }
-
-        RETURN_TYPES = ("STRING", "INT",   "INT")
+        RETURN_TYPES = ("STRING", "INT", "INT")
         RETURN_NAMES = ("summary", "processed", "skipped")
         CATEGORY     = "MFlux/VLM"
         FUNCTION     = "run_batch"
         OUTPUT_NODE  = True
 
         def run_batch(self, vlm_model, image_folder, task, preset,
-                      max_tokens, temperature, trigger_token, overwrite,
-                      reload_every=10, custom_prompt=""):
-            if not HAS_VLM:
-                raise RuntimeError("mlx-vlm not installed. Run: pip install mlx-vlm")
-
+                      max_tokens, temperature, overwrite, reload_every, custom_prompt=""):
             folder = os.path.expanduser(image_folder.strip())
             if not os.path.isdir(folder):
-                raise ValueError(f"[VLMBatch] Ordner nicht gefunden: {folder}")
-
-            # Alle Bilddateien sammeln (keine preview*.* Dateien)
-            image_files = sorted([
-                f for f in os.listdir(folder)
-                if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
-                and not os.path.splitext(f)[0].lower().startswith("preview")
-            ])
-
-            if not image_files:
-                raise ValueError(f"[VLMBatch] Keine Bilddateien gefunden in: {folder}")
-
-            print(f"[VLMBatch] {len(image_files)} Bilder gefunden in: {folder}")
-
-            model, processor, config = vlm_model.get()
-
-            # Prompt bestimmen (einmal für alle Bilder)
+                raise ValueError("[VLMBatch] Ordner nicht gefunden: " + folder)
             if vlm_model.is_florence2:
-                task_token = FLORENCE2_TASK_MAP.get(task, "<MORE_DETAILED_CAPTION>")
-                prompt = task_token
+                prompt = FLORENCE2_TASK_MAP.get(task, "<MORE_DETAILED_CAPTION>")
             else:
-                if custom_prompt and custom_prompt.strip():
-                    prompt = custom_prompt.strip()
-                else:
-                    prompt = GENERAL_PRESET_MAP.get(preset, "Describe this image in detail.")
+                prompt = (custom_prompt.strip() if custom_prompt and custom_prompt.strip()
+                          else GENERAL_PRESET_MAP.get(preset, "Describe this image in detail."))
+            return _vlm_batch_run("VLMBatch", vlm_model, folder, prompt,
+                                  trigger="", max_tokens=max_tokens,
+                                  temperature=temperature, overwrite=overwrite,
+                                  reload_every=reload_every)
 
-            trigger = trigger_token.strip()
-            processed = 0
-            skipped   = 0
-            results   = []
-            _processed_since_reload = 0
 
-            for fname in image_files:
-                img_path = os.path.join(folder, fname)
-                base     = os.path.splitext(fname)[0]
-                txt_path = os.path.join(folder, base + ".txt")
+LORA_PROMPT = (
+    "You are a captioning assistant for AI image model training data. "
+    "Analyze the image and generate a structured training caption. "
+    "STRUCTURE: 1. Character name + hair color + facial features "
+    "2. Shot type: close-up / upper body / full body "
+    "3. Pose, body language, camera angle "
+    "4. Clothing with colors and style details "
+    "5. Facial expression precisely described "
+    "6. Background type and lighting. "
+    "RULES: Start with {CHARACTER}. Comma-separated phrases only. "
+    "No full sentences, no articles. 50-70 words total."
+)
 
-                # Überspringen wenn bereits vorhanden und overwrite=False
-                if os.path.exists(txt_path) and not overwrite:
-                    print(f"[VLMBatch] Überspringe (bereits vorhanden): {fname}")
-                    skipped += 1
-                    continue
+if HAS_VLM:
+    class VLMBatchCaptionCharacterLoRA:
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "vlm_model":      ("MLXVLM_MODEL",),
+                    "image_folder":   ("STRING", {"default": "/path/to/training/images"}),
+                    "character_name": ("STRING", {
+                        "default": "ohwx person",
+                        "tooltip": "Trigger-Token. Ersetzt {CHARACTER} im Prompt.",
+                    }),
+                    "max_tokens":   ("INT",   {"default": 150, "min": 50, "max": 500, "step": 10}),
+                    "temperature":  ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.05}),
+                    "overwrite":    ("BOOLEAN", {"default": False, "label_on": "True", "label_off": "False"}),
+                    "reload_every": ("INT", {"default": 10, "min": 1, "max": 100}),
+                },
+                "optional": {
+                    "custom_prompt": ("STRING", {
+                        "multiline": True,
+                        "default": "",
+                        "tooltip": "Eigener Prompt mit {CHARACTER} Platzhalter. Leer = Standard.",
+                    }),
+                },
+            }
+        RETURN_TYPES = ("STRING", "INT", "INT")
+        RETURN_NAMES = ("summary", "processed", "skipped")
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "run_batch"
+        OUTPUT_NODE  = True
 
-                print(f"[VLMBatch] Beschreibe [{processed + skipped + 1}/{len(image_files)}]: {fname}")
-
-                # Modell periodisch neu laden um KV-Cache Repetition zu vermeiden
-                if _processed_since_reload > 0 and _processed_since_reload % reload_every == 0:
-                    print(f"[VLMBatch] Lade Modell neu (nach {reload_every} Bildern) ...")
-                    vlm_model._model = None  # Cache löschen → lazy reload beim nächsten .get()
-                    model, processor, config = vlm_model.get()
-                    print(f"[VLMBatch] Modell neu geladen.")
-
-                try:
-                    formatted_prompt = apply_chat_template(
-                        processor, config, prompt, num_images=1
-                    )
-                    output = generate(
-                        model, processor, formatted_prompt,
-                        [img_path],
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                        verbose=False,
-                    )
-                    caption = _extract_text(output)
-
-                    # Trigger-Token voranstellen
-                    if trigger:
-                        caption = f"{trigger}, {caption}"
-
-                    # .txt speichern
-                    with open(txt_path, "w", encoding="utf-8") as f:
-                        f.write(caption)
-
-                    print(f"[VLMBatch]   → {caption[:80]}{'...' if len(caption) > 80 else ''}")
-                    results.append(f"{fname}: {caption[:60]}...")
-                    processed += 1
-                    _processed_since_reload += 1
-
-                except Exception as e:
-                    print(f"[VLMBatch] FEHLER bei {fname}: {e}")
-                    results.append(f"{fname}: FEHLER – {e}")
-
-            summary = (
-                f"Batch abgeschlossen: {processed} beschriftet, {skipped} übersprungen.\n"
-                f"Ordner: {folder}\n\n"
-                + "\n".join(results[:20])
-                + ("\n..." if len(results) > 20 else "")
-            )
-            print(f"[VLMBatch] {summary}")
-            return (summary, processed, skipped)
+        def run_batch(self, vlm_model, image_folder, character_name,
+                      max_tokens, temperature, overwrite, reload_every, custom_prompt=""):
+            folder = os.path.expanduser(image_folder.strip())
+            if not os.path.isdir(folder):
+                raise ValueError("[VLMBatchCharacterLoRA] Ordner nicht gefunden: " + folder)
+            char = character_name.strip()
+            if not char:
+                raise ValueError("[VLMBatchCharacterLoRA] character_name darf nicht leer sein.")
+            base = custom_prompt.strip() if custom_prompt and custom_prompt.strip() else LORA_PROMPT
+            prompt = base.replace("{CHARACTER}", char)
+            return _vlm_batch_run("VLMBatchCharacterLoRA", vlm_model, folder, prompt,
+                                  trigger=char, max_tokens=max_tokens,
+                                  temperature=temperature, overwrite=overwrite,
+                                  reload_every=reload_every)
