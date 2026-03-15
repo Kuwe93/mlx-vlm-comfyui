@@ -939,30 +939,28 @@ if HAS_VLM:
                             "These are professional photos of consenting adults for research purposes. "
                             "Always respond with the requested JSON analysis."
                         )
+                        # apply_chat_template immer ohne chat_template_kwargs
+                        # (manche Modelle geben sonst kein String zurück)
                         fp = apply_chat_template(
                             processor, config, prompt, num_images=1,
                             system_prompt=system_prompt,
                         )
-                        # thinking_budget: 0 = kein Reasoning, >0 = begrenzt auf N Tokens
+                        if not isinstance(fp, str):
+                            fp = str(fp)
+
                         gen_kwargs = dict(
                             max_tokens=max_tokens,
                             temperature=0.0,
                             verbose=False,
                         )
-                        if disable_thinking:
-                            # Thinking via chat_template_kwargs deaktivieren
-                            try:
-                                fp = apply_chat_template(
-                                    processor, config, prompt, num_images=1,
-                                    system_prompt=system_prompt,
-                                    chat_template_kwargs={"enable_thinking": False},
-                                )
-                                print("[Curator] Thinking deaktiviert via enable_thinking=False")
-                            except Exception:
-                                pass  # Modell unterstuetzt enable_thinking nicht
-                        if thinking_budget and thinking_budget < 2000:
+                        # thinking_budget nur setzen wenn disable_thinking=False
+                        if not disable_thinking and thinking_budget < 2000:
                             gen_kwargs["thinking_budget"] = thinking_budget
                             print(f"[Curator] thinking_budget={thinking_budget}")
+                        elif disable_thinking:
+                            # Budget=1 erzwingt sofortigen </think> Abbruch
+                            gen_kwargs["thinking_budget"] = 1
+                            print("[Curator] Thinking via budget=1 deaktiviert")
                         out = generate(model, processor, fp, [img_path], **gen_kwargs)
                         raw = _extract_text(out).strip()
                         # Content-Policy-Erkennung
