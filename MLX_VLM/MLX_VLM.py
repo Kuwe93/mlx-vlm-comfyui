@@ -967,14 +967,24 @@ if HAS_VLM:
                             verbose=False,
                         )
                         # thinking_budget nur setzen wenn disable_thinking=False
+                        # und nur wenn das Modell es unterstützt (try/except)
                         if not disable_thinking and thinking_budget < 2000:
                             gen_kwargs["thinking_budget"] = thinking_budget
                             print(f"[Curator] thinking_budget={thinking_budget}")
                         elif disable_thinking:
-                            # Budget=1 erzwingt sofortigen </think> Abbruch
-                            gen_kwargs["thinking_budget"] = 1
-                            print("[Curator] Thinking via budget=1 deaktiviert")
-                        out = generate(model, processor, fp, [img_path], **gen_kwargs)
+                            print("[Curator] Thinking deaktiviert (kein Budget gesetzt)")
+
+                        # generate() mit Fallback ohne thinking_budget
+                        try:
+                            out = generate(model, processor, fp, [img_path], **gen_kwargs)
+                        except Exception as gen_e:
+                            if "thinking_budget" in gen_kwargs:
+                                print(f"[Curator] thinking_budget nicht unterstuetzt ({gen_e}), "
+                                      f"versuche ohne ...")
+                                del gen_kwargs["thinking_budget"]
+                                out = generate(model, processor, fp, [img_path], **gen_kwargs)
+                            else:
+                                raise
                         raw = _extract_text(out).strip()
                         # Content-Policy-Erkennung
                         is_policy_block = (
