@@ -818,6 +818,15 @@ if HAS_VLM:
                             "-1 = kein Limit (Standard-Verhalten, fuer Nicht-Thinking-Modelle)."
                         ),
                     }),
+                    "max_tokens": ("INT", {
+                        "default": 400, "min": 100, "max": 4000, "step": 100,
+                        "tooltip": (
+                            "Maximale Tokens der Gesamtantwort. "
+                            "Bei Modellen die erst denken und dann JSON ausgeben "
+                            "hoeher setzen (z.B. 1500-2000) damit das JSON "
+                            "nach dem Reasoning noch Platz hat."
+                        ),
+                    }),
                 },
                 "optional": {
                     "fallback_model_path": ("STRING", {
@@ -842,7 +851,7 @@ if HAS_VLM:
 
         def curate(self, vlm_model, image_folder, dataset_version,
                    move_files, overwrite_analysis, reload_every,
-                   thinking_budget=0,
+                   thinking_budget=0, max_tokens=400,
                    fallback_model_path="", custom_criteria=""):
             import json as _json
             import shutil
@@ -930,7 +939,7 @@ if HAS_VLM:
                         )
                         # thinking_budget: 0 = kein Reasoning, >0 = begrenzt auf N Tokens
                         gen_kwargs = dict(
-                            max_tokens=400,
+                            max_tokens=max_tokens,
                             temperature=0.0,
                             verbose=False,
                         )
