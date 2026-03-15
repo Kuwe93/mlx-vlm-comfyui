@@ -1173,3 +1173,235 @@ class VLMCornerInpainter:
               f"{corner_w}x{corner_h}px ({corner_size_percent}%)")
 
         return (image, mask_tensor, detected)
+
+
+# ---------------------------------------------------------------------------
+# Node: VLMCuratorReview
+# Zweiter Pass über rejected/ oder needs_review/ Ordner.
+# Lädt ein anderes VLM-Modell und re-analysiert nur die abgelehnten Bilder.
+# Das erste Modell sollte vorher manuell entladen werden (VLMModelUnloader).
+# ---------------------------------------------------------------------------
+if HAS_VLM:
+    class VLMCuratorReview:
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "vlm_model": ("MLXVLM_MODEL",),
+                    "base_folder": ("STRING", {
+                        "default": "/path/to/candidate/images",
+                        "tooltip": "Derselbe Basis-Ordner wie beim ersten Curator-Durchlauf. "
+                                   "Der Node sucht automatisch nach rejected/ und needs_review/ darin.",
+                    }),
+                    "review_source": (["needs_review", "rejected", "both"], {
+                        "default": "needs_review",
+                        "tooltip": "'needs_review' = nur Content-Policy-Blocks nochmal prüfen. "
+                                   "'rejected' = alle abgelehnten Bilder nochmal prüfen. "
+                                   "'both' = beides.",
+                    }),
+                    "move_files": ("BOOLEAN", {
+                        "default": True,
+                        "label_on": "True", "label_off": "False",
+                        "tooltip": "Neu approved Bilder in approved/ verschieben.",
+                    }),
+                    "reload_every": ("INT", {"default": 5, "min": 1, "max": 50}),
+                },
+            }
+
+        RETURN_TYPES = ("STRING", "INT", "INT")
+        RETURN_NAMES = ("report",  "newly_approved", "still_rejected")
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "review"
+        OUTPUT_NODE  = True
+
+        def review(self, vlm_model, base_folder, review_source,
+                   move_files, reload_every):
+            import json as _json
+            import shutil
+
+            base = os.path.expanduser(base_folder.strip())
+            if not os.path.isdir(base):
+                raise ValueError(f"[CuratorReview] Ordner nicht gefunden: {base}")
+
+            approved_dir     = os.path.join(base, "approved")
+            rejected_dir     = os.path.join(base, "rejected")
+            needs_review_dir = os.path.join(base, "needs_review")
+            analysis_dir     = os.path.join(base, ".analysis")
+            os.makedirs(approved_dir, exist_ok=True)
+
+            # Bilder aus den gewählten Quell-Ordnern sammeln
+            source_dirs = []
+            if review_source in ("needs_review", "both"):
+                if os.path.isdir(needs_review_dir):
+                    source_dirs.append(needs_review_dir)
+                else:
+                    print(f"[CuratorReview] needs_review/ nicht gefunden, übersprungen.")
+            if review_source in ("rejected", "both"):
+                if os.path.isdir(rejected_dir):
+                    source_dirs.append(rejected_dir)
+                else:
+                    print(f"[CuratorReview] rejected/ nicht gefunden, übersprungen.")
+
+            image_files = []
+            for src_dir in source_dirs:
+                for fname in sorted(os.listdir(src_dir)):
+                    if os.path.splitext(fname)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS:
+                        image_files.append((src_dir, fname))
+
+            if not image_files:
+                msg = f"[CuratorReview] Keine Bilder in {review_source}/ gefunden."
+                print(msg)
+                return (msg, 0, 0)
+
+            print(f"[CuratorReview] {len(image_files)} Bilder zur Re-Analyse.")
+
+            model, processor, config = vlm_model.get()
+            newly_approved  = []
+            still_rejected  = []
+            since_reload    = 0
+
+            CONTENT_POLICY_MARKERS = [
+                "content policy", "content_policy", "violates", "unsafe",
+                "inappropriate", "cannot analyze", "can't analyze",
+                "I cannot", "I can't", "sorry",
+            ]
+
+            for i, (src_dir, fname) in enumerate(image_files, 1):
+                img_path  = os.path.join(src_dir, fname)
+                base_name = os.path.splitext(fname)[0]
+                json_path = os.path.join(analysis_dir, base_name + "_review.json")
+
+                print(f"[CuratorReview] [{i}/{len(image_files)}] Re-analysiere: {fname}")
+
+                if since_reload > 0 and since_reload % reload_every == 0:
+                    print("[CuratorReview] Lade Modell neu ...")
+                    vlm_model._model = None
+                    model, processor, config = vlm_model.get()
+
+                try:
+                    fp = apply_chat_template(
+                        processor, config, CURATOR_ANALYSIS_PROMPT, num_images=1
+                    )
+                    out = generate(model, processor, fp, [img_path],
+                                   max_tokens=300, temperature=0.0, verbose=False)
+                    raw = _extract_text(out).strip()
+
+                    # Nochmal Content-Policy?
+                    is_policy_block = (
+                        not raw.startswith("{") and
+                        any(m in raw.lower() for m in CONTENT_POLICY_MARKERS)
+                    )
+
+                    if is_policy_block:
+                        print(f"[CuratorReview] ✗ Nochmal abgelehnt (Policy): {fname}")
+                        analysis = {
+                            "filename": fname,
+                            "approved": False,
+                            "reject_reason": "content_policy_block_review",
+                            "category": "unknown", "emotion": "unknown",
+                            "angle": "unknown", "face_quality": "unknown",
+                        }
+                    else:
+                        if "```" in raw:
+                            raw = raw.split("```")[1]
+                            if raw.startswith("json"):
+                                raw = raw[4:]
+                        analysis = _json.loads(raw.strip())
+                        analysis["filename"] = fname
+                        analysis["_reviewed_by"] = vlm_model.model_path
+
+                    # Analyse speichern
+                    with open(json_path, "w") as f:
+                        _json.dump(analysis, f, indent=2)
+
+                    since_reload += 1
+                    is_approved = analysis.get("approved", False)
+
+                    status = "✓ APPROVED" if is_approved else "✗ rejected"
+                    cat    = analysis.get("category", "?")
+                    emotion= analysis.get("emotion",  "?")
+                    print(f"[CuratorReview]   {status} | {cat} | {emotion}")
+
+                    if is_approved:
+                        newly_approved.append(analysis)
+                        if move_files and os.path.exists(img_path):
+                            shutil.move(img_path, os.path.join(approved_dir, fname))
+                            print(f"[CuratorReview]   → approved/{fname}")
+                    else:
+                        still_rejected.append(analysis)
+
+                except Exception as e:
+                    print(f"[CuratorReview] FEHLER bei {fname}: {e}")
+                    still_rejected.append({
+                        "filename": fname,
+                        "reject_reason": f"review_error: {str(e)}"
+                    })
+
+            # Report
+            report_lines = [
+                f"Curator Review Report",
+                f"Basis-Ordner: {base}",
+                f"Quelle: {review_source}/ | Gesamt: {len(image_files)}",
+                f"Neu approved: {len(newly_approved)} | Immer noch rejected: {len(still_rejected)}",
+                "",
+                "NEU APPROVED:",
+            ]
+            for a in newly_approved:
+                report_lines.append(
+                    f"  {a['filename']:30} {a.get('category','?'):12} {a.get('emotion','?')}"
+                )
+            report_lines += ["", "IMMER NOCH REJECTED:"]
+            for a in still_rejected:
+                report_lines.append(
+                    f"  {a['filename']:30} {a.get('reject_reason','?')}"
+                )
+
+            report = "\n".join(report_lines)
+            print(f"\n[CuratorReview] {len(newly_approved)} neu approved, "
+                  f"{len(still_rejected)} weiterhin rejected.")
+            return (report, len(newly_approved), len(still_rejected))
+
+
+# ---------------------------------------------------------------------------
+# Node: VLMModelUnloader
+# Entlädt ein VLM-Modell aus dem Speicher.
+# Zwischen VLMDatasetCurator und VLMCuratorReview zu schalten.
+# ---------------------------------------------------------------------------
+if HAS_VLM:
+    class VLMModelUnloader:
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "vlm_model": ("MLXVLM_MODEL", {
+                        "tooltip": "Modell das entladen werden soll.",
+                    }),
+                },
+            }
+
+        RETURN_TYPES = ("STRING",)
+        RETURN_NAMES = ("status",)
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "unload"
+        OUTPUT_NODE  = True
+
+        def unload(self, vlm_model):
+            try:
+                model_path = vlm_model.model_path
+                vlm_model._model     = None
+                vlm_model._processor = None
+                vlm_model._config    = None
+                import gc
+                gc.collect()
+                try:
+                    import mlx.core as mx
+                    mx.metal.clear_cache()
+                except Exception:
+                    pass
+                msg = f"[VLMModelUnloader] Modell entladen: {model_path}"
+                print(msg)
+                return (msg,)
+            except Exception as e:
+                msg = f"[VLMModelUnloader] Fehler beim Entladen: {e}"
+                print(msg)
+                return (msg,)
