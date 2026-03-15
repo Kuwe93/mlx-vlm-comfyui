@@ -8,6 +8,7 @@ try:
         MfluxVLMBatchCaption,
         VLMBatchCaptionCharacterLoRA,
         VLMDatasetCurator,
+        VLMCornerInpainter,
     )
 except ImportError:
     HAS_VLM = False
@@ -26,6 +27,7 @@ if HAS_VLM:
         "MfluxVLMBatchCaption":     MfluxVLMBatchCaption,
         "VLMBatchCaptionCharacterLoRA": VLMBatchCaptionCharacterLoRA,
         "VLMDatasetCurator":            VLMDatasetCurator,
+        "VLMCornerInpainter":          VLMCornerInpainter,
     }
     NODE_DISPLAY_NAME_MAPPINGS = {
         "MfluxVLMLoader":    "MLX VLM Loader",
@@ -35,4 +37,5 @@ if HAS_VLM:
         "MfluxVLMBatchCaption":     "MLX VLM Batch Caption",
         "VLMBatchCaptionCharacterLoRA": "VLM Batch Caption Character LoRA",
         "VLMDatasetCurator":            "VLM Dataset Curator",
+        "VLMCornerInpainter":          "VLM Corner Inpainter",
     }

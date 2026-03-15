@@ -930,3 +930,158 @@ if HAS_VLM:
             print(f"\n[Curator] Report gespeichert: {report_path}")
             print(report)
             return (report, len(approved_list), len(rejected_list), needs_slots)
+
+
+# ---------------------------------------------------------------------------
+# Node: VLMCornerInpainter
+# Erstellt Ecken-Masken für Eck-Overlay-Entfernung.
+# Mit optionalem vlm_model erkennt das VLM automatisch welche Ecke.
+# Ohne vlm_model: manueller corners-Parameter oder Fallback all_4.
+# ---------------------------------------------------------------------------
+import torch
+import numpy as np
+from PIL import Image as _PILImage
+
+CORNER_DETECT_PROMPT = """Look at this image carefully. Is there a corner overlay, logo, or text overlay in any corner?
+Respond with ONLY a JSON object, no other text:
+{
+  "has_corner overlay": true or false,
+  "corner": "top_left" or "top_right" or "bottom_left" or "bottom_right" or "none",
+  "confidence": "high" or "medium" or "low"
+}
+Only report ONE corner (the most prominent corner overlay location)."""
+
+CORNER_REMAP = {
+    "top_left":     "top_left",
+    "top_right":    "top_right",
+    "bottom_left":  "bottom_left",
+    "bottom_right": "bottom_right",
+    "none":         "all_4",
+}
+
+class VLMCornerInpainter:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "corner_size_percent": ("FLOAT", {
+                    "default": 15.0, "min": 1.0, "max": 40.0, "step": 0.5,
+                    "tooltip": "Groesse der Eckmaske in Prozent der Bildgroesse.",
+                }),
+                "fallback_corners": (["all_4", "top_left", "top_right",
+                                      "bottom_left", "bottom_right",
+                                      "top_both", "bottom_both"], {
+                    "default": "all_4",
+                    "tooltip": "Wird verwendet wenn kein VLM verbunden ist "
+                               "oder das VLM kein Eck-Overlay erkennt.",
+                }),
+                "feather": ("INT", {
+                    "default": 8, "min": 0, "max": 50,
+                    "tooltip": "Weiche Kante der Maske in Pixeln.",
+                }),
+            },
+            "optional": {
+                "vlm_model": ("MLXVLM_MODEL", {
+                    "tooltip": "Optional: VLM analysiert das Bild und erkennt "
+                               "automatisch welche Ecke das Eck-Overlay enthaelt. "
+                               "Ohne VLM wird fallback_corners verwendet.",
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
+    RETURN_NAMES = ("image",  "mask",  "detected_corner")
+    CATEGORY     = "MFlux/VLM"
+    FUNCTION     = "create_corner_mask"
+
+    def create_corner_mask(self, image, corner_size_percent,
+                           fallback_corners, feather, vlm_model=None):
+        import json as _json
+
+        b, h, w, c = image.shape
+        corner_h = int(h * corner_size_percent / 100)
+        corner_w = int(w * corner_size_percent / 100)
+
+        detected = fallback_corners  # Default
+
+        # ── VLM-Analyse wenn verbunden ──────────────────────────────────────
+        if vlm_model is not None and HAS_VLM:
+            try:
+                img_np  = (image[0].cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+                img_pil = _PILImage.fromarray(img_np)
+                tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                img_pil.save(tmp.name)
+                tmp_path = tmp.name
+
+                model, processor, config = vlm_model.get()
+                fp  = apply_chat_template(processor, config,
+                                          CORNER_DETECT_PROMPT, num_images=1)
+                out = generate(model, processor, fp, [tmp_path],
+                               max_tokens=80, temperature=0.0, verbose=False)
+                raw = _extract_text(out).strip()
+
+                # JSON extrahieren
+                if "```" in raw:
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                result = _json.loads(raw.strip())
+
+                has_wm  = result.get("has_corner overlay", False)
+                corner  = result.get("corner", "none")
+                conf    = result.get("confidence", "low")
+
+                print(f"[CornerInpainter] VLM: has_corner overlay={has_wm}, "
+                      f"corner={corner}, confidence={conf}")
+
+                if has_wm and corner in CORNER_REMAP and corner != "none":
+                    detected = CORNER_REMAP[corner]
+                    print(f"[CornerInpainter] Erkannte Ecke: {detected}")
+                else:
+                    detected = fallback_corners
+                    print(f"[CornerInpainter] Kein WZ erkannt → Fallback: {detected}")
+
+                os.unlink(tmp_path)
+
+            except Exception as e:
+                print(f"[CornerInpainter] VLM-Analyse fehlgeschlagen: {e} "
+                      f"→ Fallback: {fallback_corners}")
+                detected = fallback_corners
+        else:
+            print(f"[CornerInpainter] Kein VLM → {fallback_corners}")
+
+        # ── Maske erstellen ─────────────────────────────────────────────────
+        mask_np = np.zeros((h, w), dtype=np.float32)
+
+        base_corners = {
+            "top_left":     (0,          corner_h, 0,          corner_w),
+            "top_right":    (0,          corner_h, w-corner_w, w),
+            "bottom_left":  (h-corner_h, h,        0,          corner_w),
+            "bottom_right": (h-corner_h, h,        w-corner_w, w),
+        }
+        region_map = {
+            "top_left":     [base_corners["top_left"]],
+            "top_right":    [base_corners["top_right"]],
+            "bottom_left":  [base_corners["bottom_left"]],
+            "bottom_right": [base_corners["bottom_right"]],
+            "all_4":        list(base_corners.values()),
+            "top_both":     [base_corners["top_left"],    base_corners["top_right"]],
+            "bottom_both":  [base_corners["bottom_left"], base_corners["bottom_right"]],
+        }
+
+        for (y1, y2, x1, x2) in region_map.get(detected, list(base_corners.values())):
+            mask_np[y1:y2, x1:x2] = 1.0
+
+        if feather > 0:
+            import cv2
+            ks = feather * 2 + 1
+            mask_np = cv2.GaussianBlur(mask_np, (ks, ks), feather / 3)
+            mask_np = np.clip(mask_np, 0.0, 1.0)
+
+        mask_tensor = torch.from_numpy(mask_np).unsqueeze(0)
+
+        print(f"[CornerInpainter] Maske: {detected}, "
+              f"{corner_w}x{corner_h}px ({corner_size_percent}%)")
+
+        return (image, mask_tensor, detected)

@@ -1,0 +1,313 @@
+{
+  "last_node_id": 6,
+  "last_link_id": 5,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Note",
+      "pos": [
+        20,
+        20
+      ],
+      "size": [
+        580,
+        140
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "title": "Anleitung",
+      "widgets_values": [
+        "Corner Overlay Remover – VLM erkennt automatisch welche Ecke\n\nDas VLM analysiert jedes Bild und erkennt ob ein Eck-Overlay\nvorhanden ist und in welcher Ecke. Dann wird nur diese Ecke maskiert.\n\nOhne VLM-Verbindung: fallback_corners wird verwendet (z.B. all_4)\nTipp: Qwen2.5-VL-3B reicht fuer Eck-Overlay-Erkennung aus – schneller als 7B"
+      ],
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "color": "#332233",
+      "bgcolor": "#332233"
+    },
+    {
+      "id": 2,
+      "type": "MfluxVLMLoader",
+      "pos": [
+        20,
+        180
+      ],
+      "size": [
+        340,
+        100
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "title": "VLM Loader (Ecken-Erkennung)",
+      "widgets_values": [
+        "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+        ""
+      ],
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "vlm_model",
+          "type": "MLXVLM_MODEL",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MfluxVLMLoader"
+      }
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [
+        20,
+        310
+      ],
+      "size": [
+        280,
+        100
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "title": "Bild laden",
+      "widgets_values": [
+        "example.png",
+        "image"
+      ],
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": [],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      }
+    },
+    {
+      "id": 4,
+      "type": "VLMCornerInpainter",
+      "pos": [
+        400,
+        180
+      ],
+      "size": [
+        340,
+        240
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "title": "Corner Inpainter",
+      "widgets_values": [
+        15.0,
+        "all_4",
+        8
+      ],
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 2,
+          "slot_index": 0
+        },
+        {
+          "name": "vlm_model",
+          "type": "MLXVLM_MODEL",
+          "link": 1,
+          "slot_index": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            3
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "links": [
+            4
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "detected_corner",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 2
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VLMCornerInpainter"
+      }
+    },
+    {
+      "id": 5,
+      "type": "MfluxFillLoader",
+      "pos": [
+        780,
+        180
+      ],
+      "size": [
+        300,
+        100
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "title": "Fill Loader",
+      "widgets_values": [],
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 3,
+          "slot_index": 0
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": 4,
+          "slot_index": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "fill",
+          "type": "MfluxFillPipeline",
+          "links": [
+            5
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MfluxFillLoader"
+      }
+    },
+    {
+      "id": 6,
+      "type": "MfluxFillNode",
+      "pos": [
+        780,
+        310
+      ],
+      "size": [
+        300,
+        280
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "title": "Z-Image Fill Inpainting",
+      "widgets_values": [
+        "clean background, no text, no logo",
+        "4",
+        -1,
+        512,
+        512,
+        20,
+        30.0,
+        true
+      ],
+      "inputs": [
+        {
+          "name": "fill",
+          "type": "MfluxFillPipeline",
+          "link": 5,
+          "slot_index": 0
+        },
+        {
+          "name": "Local_model",
+          "type": "PATH",
+          "link": null,
+          "slot_index": 1
+        },
+        {
+          "name": "Loras",
+          "type": "MfluxLorasPipeline",
+          "link": null,
+          "slot_index": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MfluxFillNode"
+      }
+    }
+  ],
+  "links": [
+    [
+      1,
+      2,
+      0,
+      4,
+      1,
+      "MLXVLM_MODEL"
+    ],
+    [
+      2,
+      3,
+      0,
+      4,
+      0,
+      "IMAGE"
+    ],
+    [
+      3,
+      4,
+      0,
+      5,
+      0,
+      "IMAGE"
+    ],
+    [
+      4,
+      4,
+      1,
+      5,
+      1,
+      "MASK"
+    ],
+    [
+      5,
+      5,
+      0,
+      6,
+      0,
+      "MfluxFillPipeline"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
