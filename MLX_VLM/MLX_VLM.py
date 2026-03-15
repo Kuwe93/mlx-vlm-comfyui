@@ -719,32 +719,35 @@ if HAS_VLM:
 # - Generiert JSON-Report
 # ---------------------------------------------------------------------------
 
-CURATOR_ANALYSIS_PROMPT = """Analyze this portrait image for AI training dataset curation.
-Respond with ONLY a JSON object, no other text:
-{
-  "approved": true or false,
-  "reject_reason": "reason if rejected, else null",
-  "category": "close_up" or "upper_body" or "full_body" or "back_side",
-  "emotion": "neutral" or "joy" or "anger" or "fear" or "sadness" or "surprise" or "excited" or "thoughtful" or "confident" or "relaxed" or "disgust" or "contempt",
-  "angle": "frontal" or "three_quarter_left" or "three_quarter_right" or "side_left" or "side_right" or "from_above" or "from_below" or "back",
-  "hair_visible": true or false,
-  "face_visible": true or false,
-  "face_quality": "sharp" or "blurry" or "partially_occluded",
-  "notes": "brief observation or null"
-}
+CURATOR_ANALYSIS_PROMPT = """OUTPUT RULE: Your entire response must be a single JSON object. Start your response with { and end with }. Do not write any text before or after the JSON. Do not explain. Do not think out loud.
+
+{"approved": true, "reject_reason": null, "category": "close_up", "emotion": "neutral", "angle": "frontal", "hair_visible": true, "face_visible": true, "face_quality": "sharp", "notes": null}
+
+Now analyze the image and respond in exactly that format:
+
+approved: true if ALL criteria are met, false otherwise.
+reject_reason: null if approved, else one short reason.
+category: exactly one of: close_up, upper_body, full_body, back_side
+emotion: exactly one of: neutral, joy, anger, fear, sadness, surprise, excited, thoughtful, confident, relaxed
+angle: exactly one of: frontal, three_quarter_left, three_quarter_right, side_left, side_right, from_above, from_below, back
+hair_visible: true or false
+face_visible: true or false
+face_quality: exactly one of: sharp, blurry, partially_occluded
+notes: null or one short phrase
 
 APPROVAL CRITERIA (reject if any fail):
 - Exactly one person clearly visible
 - No heavy blur or motion blur on face
-- No strong obstruction of face (hands, objects)
-- Image is not heavily cropped or distorted
-- Minimum resolution appears acceptable
+- No strong obstruction of face
+- Image not heavily cropped or distorted
 
 CATEGORY DEFINITIONS:
-- close_up: face and neck only, no shoulders or minimal shoulders
-- upper_body: from waist or chest upward including face
-- full_body: entire body visible head to toe
-- back_side: back view or side view without face"""
+- close_up: face and neck only
+- upper_body: waist or chest upward
+- full_body: entire body head to toe
+- back_side: back or side view without face
+
+Respond now with JSON only:"""
 
 # Dataset-Slot-Schema V1 (30 Bilder)
 DATASET_SCHEMA_V1 = {
