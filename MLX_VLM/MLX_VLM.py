@@ -465,6 +465,89 @@ class MfluxVLMConverter:
             ) from e
 
 
+# ---------------------------------------------------------------------------
+# Hilfsfunktion: Robuste JSON-Extraktion aus VLM-Antworten
+# ---------------------------------------------------------------------------
+def _extract_json_from_vlm(raw: str) -> dict:
+    import json as _json
+    import re
+
+    if not raw:
+        raise ValueError("Leere Antwort vom Modell")
+
+    print(f"[JSONExtract] Raw ({len(raw)} chars): {raw[:200]!r}")
+
+    # 1. Thinking-Tags entfernen
+    cleaned = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL)
+    cleaned = re.sub(r'<.thinking.>.*?<./thinking.>', '', cleaned, flags=re.DOTALL)
+    cleaned = cleaned.strip()
+
+    # 2. Code-Block ```json ... ```
+    code_block = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', cleaned, re.DOTALL)
+    if code_block:
+        try:
+            return _json.loads(code_block.group(1))
+        except Exception:
+            pass
+
+    # 3. Direkt als JSON
+    if cleaned.startswith('{'):
+        try:
+            return _json.loads(cleaned)
+        except Exception:
+            pass
+
+    # 4. JSON-Objekt mit "approved" irgendwo im Text
+    json_match = re.search(r'\{[^{}]*"approved"[^{}]*\}', cleaned, re.DOTALL)
+    if json_match:
+        try:
+            return _json.loads(json_match.group(0))
+        except Exception:
+            pass
+
+    # 5. Erstes { bis letztes }
+    start = cleaned.find('{')
+    end   = cleaned.rfind('}')
+    if start != -1 and end != -1 and end > start:
+        try:
+            return _json.loads(cleaned[start:end+1])
+        except Exception:
+            pass
+
+    # 6. Freitext-Fallback
+    print(f"[JSONExtract] Kein JSON gefunden, Freitext-Parsing ...")
+    lower = cleaned.lower()
+    result = {
+        "approved": False,
+        "reject_reason": "freetext_no_json",
+        "category": "unknown",
+        "emotion": "unknown",
+        "angle": "unknown",
+        "face_visible": True,
+        "face_quality": "unknown",
+        "notes": raw[:200],
+        "_parsed_from_freetext": True,
+    }
+    if any(w in lower for w in ["approved: true", "approve", "suitable", "good quality"]):
+        result["approved"] = True
+        result["reject_reason"] = None
+    for cat, kws in [("close_up", ["close-up", "close up", "face only"]),
+                     ("upper_body", ["upper body", "waist up", "chest up"]),
+                     ("full_body",  ["full body", "full-body", "head to toe"]),
+                     ("back_side",  ["back view", "side view", "rear"])]:
+        if any(k in lower for k in kws):
+            result["category"] = cat
+            break
+    for emotion in ["neutral","joy","anger","fear","sadness","surprise",
+                    "excited","thoughtful","confident","relaxed"]:
+        if emotion in lower:
+            result["emotion"] = emotion
+            break
+    print(f"[JSONExtract] Freitext: approved={result['approved']}, "
+          f"category={result['category']}, emotion={result['emotion']}")
+    return result
+
+
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 def _vlm_batch_run(tag, vlm_model, folder, prompt, trigger,
@@ -876,12 +959,8 @@ if HAS_VLM:
                                 "_needs_review": True,
                             }
                         else:
-                            # JSON extrahieren
-                            if "```" in raw:
-                                raw = raw.split("```")[1]
-                                if raw.startswith("json"):
-                                    raw = raw[4:]
-                            analysis = _json.loads(raw.strip())
+                            # Robuste JSON-Extraktion
+                            analysis = _extract_json_from_vlm(raw)
                             analysis["filename"] = fname
 
                         # Analyse cachen
@@ -1302,11 +1381,7 @@ if HAS_VLM:
                             "angle": "unknown", "face_quality": "unknown",
                         }
                     else:
-                        if "```" in raw:
-                            raw = raw.split("```")[1]
-                            if raw.startswith("json"):
-                                raw = raw[4:]
-                        analysis = _json.loads(raw.strip())
+                        analysis = _extract_json_from_vlm(raw)
                         analysis["filename"] = fname
                         analysis["_reviewed_by"] = vlm_model.model_path
 
