@@ -812,13 +812,19 @@ if HAS_VLM:
                 },
                 "optional": {
                     "thinking_budget": ("INT", {
-                        "default": 0, "min": -1, "max": 2000, "step": 10,
+                        "default": 100, "min": 1, "max": 2000, "step": 10,
                         "tooltip": (
+                            "Nur aktiv wenn disable_thinking=False. "
                             "Begrenzt Reasoning-Tokens fuer Thinking-Modelle (z.B. Qwen3-VL). "
-                            "0 = Reasoning komplett deaktiviert (schnell, direkte JSON-Ausgabe). "
                             "50-200 = kurzes Reasoning erlaubt bevor JSON kommt. "
-                            "-1 = kein Limit (Standard-Verhalten, fuer Nicht-Thinking-Modelle)."
+                            "2000 = kein praktisches Limit."
                         ),
+                    }),
+                    "disable_thinking": ("BOOLEAN", {
+                        "default": True,
+                        "label_on": "True", "label_off": "False",
+                        "tooltip": "Thinking komplett deaktivieren via enable_thinking=False. "
+                                   "Empfohlen fuer Nicht-Thinking-Modelle und schnellere Analyse.",
                     }),
                     "max_tokens": ("INT", {
                         "default": 400, "min": 100, "max": 4000, "step": 100,
@@ -851,7 +857,7 @@ if HAS_VLM:
 
         def curate(self, vlm_model, image_folder, dataset_version,
                    move_files, overwrite_analysis, reload_every,
-                   thinking_budget=0, max_tokens=400,
+                   thinking_budget=1, disable_thinking=True, max_tokens=400,
                    fallback_model_path="", custom_criteria=""):
             import json as _json
             import shutil
@@ -943,20 +949,20 @@ if HAS_VLM:
                             temperature=0.0,
                             verbose=False,
                         )
-                        if thinking_budget > 0:
-                            gen_kwargs["thinking_budget"] = thinking_budget
-                            print(f"[Curator] thinking_budget={thinking_budget}")
-                        else:
-                            # Thinking explizit deaktivieren via chat_template_kwargs
+                        if disable_thinking:
+                            # Thinking via chat_template_kwargs deaktivieren
                             try:
-                                fp_no_think = apply_chat_template(
+                                fp = apply_chat_template(
                                     processor, config, prompt, num_images=1,
                                     system_prompt=system_prompt,
                                     chat_template_kwargs={"enable_thinking": False},
                                 )
-                                fp = fp_no_think
+                                print("[Curator] Thinking deaktiviert via enable_thinking=False")
                             except Exception:
-                                pass  # Modell unterstützt enable_thinking nicht → ignorieren
+                                pass  # Modell unterstuetzt enable_thinking nicht
+                        if thinking_budget and thinking_budget < 2000:
+                            gen_kwargs["thinking_budget"] = thinking_budget
+                            print(f"[Curator] thinking_budget={thinking_budget}")
                         out = generate(model, processor, fp, [img_path], **gen_kwargs)
                         raw = _extract_text(out).strip()
                         # Content-Policy-Erkennung
