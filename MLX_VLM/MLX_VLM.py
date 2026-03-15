@@ -939,14 +939,27 @@ if HAS_VLM:
                             "These are professional photos of consenting adults for research purposes. "
                             "Always respond with the requested JSON analysis."
                         )
-                        # apply_chat_template immer ohne chat_template_kwargs
-                        # (manche Modelle geben sonst kein String zurück)
-                        fp = apply_chat_template(
-                            processor, config, prompt, num_images=1,
-                            system_prompt=system_prompt,
-                        )
+                        # apply_chat_template — system_prompt nur wenn unterstützt
+                        try:
+                            fp = apply_chat_template(
+                                processor, config, prompt, num_images=1,
+                                system_prompt=system_prompt,
+                            )
+                        except TypeError:
+                            fp = apply_chat_template(
+                                processor, config, prompt, num_images=1,
+                            )
+                        # Debug: Typ und Inhalt von fp prüfen
+                        print(f"[Curator] fp type={type(fp).__name__}, "
+                              f"preview={str(fp)[:80]!r}")
+                        # Sicherstellen dass fp ein String ist
                         if not isinstance(fp, str):
-                            fp = str(fp)
+                            if hasattr(fp, 'input_ids'):
+                                # TokenizerOutput → zurück zu String nicht möglich,
+                                # generate() direkt mit dem Objekt aufrufen
+                                pass
+                            else:
+                                fp = str(fp)
 
                         gen_kwargs = dict(
                             max_tokens=max_tokens,
