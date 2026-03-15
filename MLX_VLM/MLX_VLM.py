@@ -725,6 +725,12 @@ if HAS_VLM:
                                     "tooltip": "Modell alle N Bilder neu laden gegen Repetition."}),
                 },
                 "optional": {
+                    "fallback_model_path": ("STRING", {
+                        "default": "",
+                        "tooltip": "HuggingFace Repo oder lokaler Pfad eines zweiten Modells "
+                                   "das bei Content-Policy-Ablehnung automatisch versucht wird. "
+                                   "z.B. 'mlx-community/SmolVLM2-2.2B-Instruct-mlx'",
+                    }),
                     "custom_criteria": ("STRING", {
                         "multiline": True,
                         "default": "",
@@ -733,15 +739,15 @@ if HAS_VLM:
                 },
             }
 
-        RETURN_TYPES = ("STRING", "INT", "INT", "INT")
-        RETURN_NAMES = ("report", "approved", "rejected", "needs_slots")
+        RETURN_TYPES = ("STRING", "INT", "INT", "INT", "INT")
+        RETURN_NAMES = ("report", "approved", "rejected", "needs_review", "needs_slots")
         CATEGORY     = "MFlux/VLM"
         FUNCTION     = "curate"
         OUTPUT_NODE  = True
 
         def curate(self, vlm_model, image_folder, dataset_version,
                    move_files, overwrite_analysis, reload_every,
-                   custom_criteria=""):
+                   fallback_model_path="", custom_criteria=""):
             import json as _json
             import shutil
 
@@ -750,11 +756,22 @@ if HAS_VLM:
                 raise ValueError(f"[Curator] Ordner nicht gefunden: {folder}")
 
             # Unterordner anlegen
-            approved_dir = os.path.join(folder, "approved")
-            rejected_dir = os.path.join(folder, "rejected")
-            analysis_dir = os.path.join(folder, ".analysis")
-            for d in [approved_dir, rejected_dir, analysis_dir]:
+            approved_dir     = os.path.join(folder, "approved")
+            rejected_dir     = os.path.join(folder, "rejected")
+            needs_review_dir = os.path.join(folder, "needs_review")
+            analysis_dir     = os.path.join(folder, ".analysis")
+            for d in [approved_dir, rejected_dir, needs_review_dir, analysis_dir]:
                 os.makedirs(d, exist_ok=True)
+
+            # Fallback-Modell laden wenn angegeben
+            fallback_vlm = None
+            if fallback_model_path and fallback_model_path.strip():
+                try:
+                    print(f"[Curator] Lade Fallback-Modell: {fallback_model_path.strip()}")
+                    fallback_vlm = MfluxVLMPipeline(fallback_model_path.strip())
+                    print(f"[Curator] Fallback-Modell bereit.")
+                except Exception as e:
+                    print(f"[Curator] Fallback-Modell konnte nicht geladen werden: {e}")
 
             image_files = sorted([
                 f for f in os.listdir(folder)
@@ -773,10 +790,17 @@ if HAS_VLM:
                 prompt += "\n\nADDITIONAL CRITERIA:\n" + custom_criteria.strip()
 
             model, processor, config = vlm_model.get()
-            approved_list = []
-            rejected_list = []
-            analyses = []
-            since_reload = 0
+            approved_list     = []
+            rejected_list     = []
+            needs_review_list = []
+            analyses          = []
+            since_reload      = 0
+
+            CONTENT_POLICY_MARKERS = [
+                "content policy", "content_policy", "violates", "unsafe",
+                "inappropriate", "cannot analyze", "can't analyze",
+                "I cannot", "I can't", "sorry",
+            ]
 
             for i, fname in enumerate(image_files, 1):
                 img_path = os.path.join(folder, fname)
@@ -797,19 +821,68 @@ if HAS_VLM:
                         model, processor, config = vlm_model.get()
 
                     try:
-                        fp = apply_chat_template(processor, config, prompt, num_images=1)
+                        # System-Prompt für professionellen Kontext
+                        system_prompt = (
+                            "You are a professional AI training data analyst. "
+                            "You are analyzing legitimate portrait photographs for an AI model training dataset. "
+                            "These are professional photos of consenting adults for research purposes. "
+                            "Always respond with the requested JSON analysis."
+                        )
+                        fp = apply_chat_template(
+                            processor, config, prompt, num_images=1,
+                            system_prompt=system_prompt,
+                        )
                         out = generate(model, processor, fp, [img_path],
                                       max_tokens=300, temperature=0.0, verbose=False)
-                        raw = _extract_text(out)
+                        raw = _extract_text(out).strip()
 
-                        # JSON aus Antwort extrahieren
-                        raw = raw.strip()
-                        if "```" in raw:
-                            raw = raw.split("```")[1]
-                            if raw.startswith("json"):
-                                raw = raw[4:]
-                        analysis = _json.loads(raw.strip())
-                        analysis["filename"] = fname
+                        # Content-Policy-Erkennung
+                        is_policy_block = (
+                            not raw.startswith("{") and
+                            any(m in raw.lower() for m in CONTENT_POLICY_MARKERS)
+                        )
+
+                        # Fallback-Modell versuchen wenn Policy-Block erkannt
+                        if is_policy_block and fallback_vlm is not None:
+                            print(f"[Curator] Content-Policy bei {fname} → versuche Fallback-Modell ...")
+                            try:
+                                fb_model, fb_processor, fb_config = fallback_vlm.get()
+                                fb_fp = apply_chat_template(fb_processor, fb_config, prompt, num_images=1)
+                                fb_out = generate(fb_model, fb_processor, fb_fp, [img_path],
+                                                  max_tokens=300, temperature=0.0, verbose=False)
+                                raw = _extract_text(fb_out).strip()
+                                is_policy_block = (
+                                    not raw.startswith("{") and
+                                    any(m in raw.lower() for m in CONTENT_POLICY_MARKERS)
+                                )
+                                if not is_policy_block:
+                                    print(f"[Curator] Fallback erfolgreich für {fname}")
+                            except Exception as fb_e:
+                                print(f"[Curator] Fallback fehlgeschlagen: {fb_e}")
+
+                        # Policy-Block → needs_review
+                        if is_policy_block:
+                            print(f"[Curator] ⚠ Content-Policy-Block bei {fname} → needs_review/")
+                            analysis = {
+                                "filename": fname,
+                                "approved": False,
+                                "reject_reason": "content_policy_block",
+                                "category": "unknown",
+                                "emotion": "unknown",
+                                "angle": "unknown",
+                                "face_visible": True,
+                                "face_quality": "unknown",
+                                "notes": f"Model refused to analyze: {raw[:100]}",
+                                "_needs_review": True,
+                            }
+                        else:
+                            # JSON extrahieren
+                            if "```" in raw:
+                                raw = raw.split("```")[1]
+                                if raw.startswith("json"):
+                                    raw = raw[4:]
+                            analysis = _json.loads(raw.strip())
+                            analysis["filename"] = fname
 
                         # Analyse cachen
                         with open(json_path, "w") as f:
@@ -844,10 +917,17 @@ if HAS_VLM:
                 print(f"[Curator]   {status} {cat} | {emotion} | {angle} | {quality}"
                       + (f" | REJECT: {reason}" if not is_approved else ""))
 
+                is_policy = analysis.get("_needs_review", False)
+
                 if is_approved:
                     approved_list.append(analysis)
                     if move_files and os.path.exists(img_path):
                         shutil.move(img_path, os.path.join(approved_dir, fname))
+                elif is_policy:
+                    needs_review_list.append(analysis)
+                    if move_files and os.path.exists(img_path):
+                        shutil.move(img_path, os.path.join(needs_review_dir, fname))
+                    print(f"[Curator] → needs_review/: {fname}")
                 else:
                     rejected_list.append(analysis)
                     if move_files and os.path.exists(img_path):
@@ -896,7 +976,8 @@ if HAS_VLM:
             report_lines = [
                 f"Dataset Curation Report",
                 f"Ordner: {folder}",
-                f"Gesamt: {len(image_files)} | Approved: {len(approved_list)} | Rejected: {len(rejected_list)}",
+                f"Gesamt: {len(image_files)} | Approved: {len(approved_list)} | "
+                f"Rejected: {len(rejected_list)} | Needs Review: {len(needs_review_list)}",
                 "",
                 "APPROVED:",
             ]
@@ -910,26 +991,33 @@ if HAS_VLM:
                 report_lines.append(
                     f"  {a['filename']:30} {a.get('reject_reason','?')}"
                 )
+            if needs_review_list:
+                report_lines += ["", "NEEDS REVIEW (Content-Policy-Block – manuell pruefen):"]
+                for a in needs_review_list:
+                    report_lines.append(f"  {a['filename']}")
             report_lines += slot_report
 
             # JSON-Gesamtreport speichern
             report_path = os.path.join(folder, "curation_report.json")
             with open(report_path, "w") as f:
                 _json.dump({
-                    "approved": approved_list,
-                    "rejected": rejected_list,
+                    "approved":     approved_list,
+                    "rejected":     rejected_list,
+                    "needs_review": needs_review_list,
                     "summary": {
-                        "total": len(image_files),
-                        "approved": len(approved_list),
-                        "rejected": len(rejected_list),
-                        "needs_slots": needs_slots,
+                        "total":        len(image_files),
+                        "approved":     len(approved_list),
+                        "rejected":     len(rejected_list),
+                        "needs_review": len(needs_review_list),
+                        "needs_slots":  needs_slots,
                     }
                 }, f, indent=2, ensure_ascii=False)
 
             report = "\n".join(report_lines)
             print(f"\n[Curator] Report gespeichert: {report_path}")
             print(report)
-            return (report, len(approved_list), len(rejected_list), needs_slots)
+            return (report, len(approved_list), len(rejected_list),
+                    len(needs_review_list), needs_slots)
 
 
 # ---------------------------------------------------------------------------
