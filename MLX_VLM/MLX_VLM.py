@@ -619,3 +619,314 @@ if HAS_VLM:
                                   trigger=char, max_tokens=max_tokens,
                                   temperature=temperature, overwrite=overwrite,
                                   reload_every=reload_every)
+
+
+# ---------------------------------------------------------------------------
+# Node: VLMDatasetCurator
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Node: VLMDatasetCurator
+# Analysiert Bilder mit einem VLM und:
+# - Erkennt Kategorie (close-up / upper_body / full_body / back_side)
+# - Erkennt Emotion
+# - Erkennt Blickwinkel
+# - Bewertet Qualität (approved / rejected)
+# - Sortiert Bilder in Unterordner
+# - Trackt Dataset-Slots gegen V1/V2 Schema
+# - Generiert JSON-Report
+# ---------------------------------------------------------------------------
+
+CURATOR_ANALYSIS_PROMPT = """Analyze this portrait image for AI training dataset curation.
+Respond with ONLY a JSON object, no other text:
+{
+  "approved": true or false,
+  "reject_reason": "reason if rejected, else null",
+  "category": "close_up" or "upper_body" or "full_body" or "back_side",
+  "emotion": "neutral" or "joy" or "anger" or "fear" or "sadness" or "surprise" or "excited" or "thoughtful" or "confident" or "relaxed" or "disgust" or "contempt",
+  "angle": "frontal" or "three_quarter_left" or "three_quarter_right" or "side_left" or "side_right" or "from_above" or "from_below" or "back",
+  "hair_visible": true or false,
+  "face_visible": true or false,
+  "face_quality": "sharp" or "blurry" or "partially_occluded",
+  "notes": "brief observation or null"
+}
+
+APPROVAL CRITERIA (reject if any fail):
+- Exactly one person clearly visible
+- No heavy blur or motion blur on face
+- No strong obstruction of face (hands, objects)
+- Image is not heavily cropped or distorted
+- Minimum resolution appears acceptable
+
+CATEGORY DEFINITIONS:
+- close_up: face and neck only, no shoulders or minimal shoulders
+- upper_body: from waist or chest upward including face
+- full_body: entire body visible head to toe
+- back_side: back view or side view without face"""
+
+# Dataset-Slot-Schema V1 (30 Bilder)
+DATASET_SCHEMA_V1 = {
+    "close_up": {
+        "total": 12,
+        "slots": [
+            {"angle": "frontal",            "emotion": "neutral",    "required": True},
+            {"angle": "frontal",            "emotion": "joy",        "required": True},
+            {"angle": "three_quarter_left", "emotion": "anger",      "required": True},
+            {"angle": "three_quarter_right","emotion": "fear",       "required": True},
+            {"angle": "from_above",         "emotion": "neutral",    "required": False},
+            {"angle": "from_below",         "emotion": "confident",  "required": False},
+            {"angle": "side_left",          "emotion": "neutral",    "required": False},
+            {"angle": "side_right",         "emotion": "sadness",    "required": True},
+            {"angle": "frontal",            "emotion": "relaxed",    "required": False},
+            {"angle": "three_quarter_right","emotion": "surprise",   "required": False},
+            {"angle": "three_quarter_left", "emotion": "excited",    "required": False},
+            {"angle": "from_above",         "emotion": "confident",  "required": False},
+        ]
+    },
+    "upper_body": {"total": 8},
+    "full_body":  {"total": 6},
+    "back_side":  {"total": 4},
+}
+
+DATASET_SCHEMA_V2 = {
+    "close_up":   {"total": 16},
+    "upper_body": {"total": 10},
+    "full_body":  {"total": 8},
+    "back_side":  {"total": 6},
+}
+
+
+if HAS_VLM:
+    class VLMDatasetCurator:
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "vlm_model":    ("MLXVLM_MODEL",),
+                    "image_folder": ("STRING", {
+                        "default": "/path/to/candidate/images",
+                        "tooltip": "Ordner mit Kandidatenbildern fuer das Training.",
+                    }),
+                    "dataset_version": (["V1 (30 Bilder)", "V2 (40 Bilder)", "Nur Qualitaetspruefung"], {
+                        "default": "V1 (30 Bilder)",
+                        "tooltip": "Schema gegen das geprueft wird.",
+                    }),
+                    "move_files": ("BOOLEAN", {
+                        "default": True,
+                        "label_on": "True", "label_off": "False",
+                        "tooltip": "True = Bilder in approved/ und rejected/ verschieben. "
+                                   "False = nur analysieren ohne Dateien zu bewegen.",
+                    }),
+                    "overwrite_analysis": ("BOOLEAN", {
+                        "default": False,
+                        "label_on": "True", "label_off": "False",
+                        "tooltip": "Bereits analysierte Bilder (vorhandene .json) erneut analysieren.",
+                    }),
+                    "reload_every": ("INT", {"default": 5, "min": 1, "max": 50,
+                                    "tooltip": "Modell alle N Bilder neu laden gegen Repetition."}),
+                },
+                "optional": {
+                    "custom_criteria": ("STRING", {
+                        "multiline": True,
+                        "default": "",
+                        "tooltip": "Zusaetzliche Kriterien die ans Analyse-Prompt angehaengt werden.",
+                    }),
+                },
+            }
+
+        RETURN_TYPES = ("STRING", "INT", "INT", "INT")
+        RETURN_NAMES = ("report", "approved", "rejected", "needs_slots")
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "curate"
+        OUTPUT_NODE  = True
+
+        def curate(self, vlm_model, image_folder, dataset_version,
+                   move_files, overwrite_analysis, reload_every,
+                   custom_criteria=""):
+            import json as _json
+            import shutil
+
+            folder = os.path.expanduser(image_folder.strip())
+            if not os.path.isdir(folder):
+                raise ValueError(f"[Curator] Ordner nicht gefunden: {folder}")
+
+            # Unterordner anlegen
+            approved_dir = os.path.join(folder, "approved")
+            rejected_dir = os.path.join(folder, "rejected")
+            analysis_dir = os.path.join(folder, ".analysis")
+            for d in [approved_dir, rejected_dir, analysis_dir]:
+                os.makedirs(d, exist_ok=True)
+
+            image_files = sorted([
+                f for f in os.listdir(folder)
+                if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
+                and not os.path.splitext(f)[0].lower().startswith("preview")
+            ])
+
+            if not image_files:
+                raise ValueError(f"[Curator] Keine Bilddateien in: {folder}")
+
+            print(f"[Curator] {len(image_files)} Bilder gefunden.")
+
+            # Prompt aufbauen
+            prompt = CURATOR_ANALYSIS_PROMPT
+            if custom_criteria and custom_criteria.strip():
+                prompt += "\n\nADDITIONAL CRITERIA:\n" + custom_criteria.strip()
+
+            model, processor, config = vlm_model.get()
+            approved_list = []
+            rejected_list = []
+            analyses = []
+            since_reload = 0
+
+            for i, fname in enumerate(image_files, 1):
+                img_path = os.path.join(folder, fname)
+                base     = os.path.splitext(fname)[0]
+                json_path = os.path.join(analysis_dir, base + ".json")
+
+                # Vorhandene Analyse verwenden wenn vorhanden
+                if os.path.exists(json_path) and not overwrite_analysis:
+                    with open(json_path) as f:
+                        analysis = _json.load(f)
+                    print(f"[Curator] [{i}/{len(image_files)}] {fname} (gecacht)")
+                else:
+                    print(f"[Curator] [{i}/{len(image_files)}] Analysiere: {fname}")
+
+                    if since_reload > 0 and since_reload % reload_every == 0:
+                        print("[Curator] Lade Modell neu ...")
+                        vlm_model._model = None
+                        model, processor, config = vlm_model.get()
+
+                    try:
+                        fp = apply_chat_template(processor, config, prompt, num_images=1)
+                        out = generate(model, processor, fp, [img_path],
+                                      max_tokens=300, temperature=0.0, verbose=False)
+                        raw = _extract_text(out)
+
+                        # JSON aus Antwort extrahieren
+                        raw = raw.strip()
+                        if "```" in raw:
+                            raw = raw.split("```")[1]
+                            if raw.startswith("json"):
+                                raw = raw[4:]
+                        analysis = _json.loads(raw.strip())
+                        analysis["filename"] = fname
+
+                        # Analyse cachen
+                        with open(json_path, "w") as f:
+                            _json.dump(analysis, f, indent=2)
+
+                        since_reload += 1
+
+                    except Exception as e:
+                        print(f"[Curator] FEHLER bei {fname}: {e}")
+                        analysis = {
+                            "filename": fname,
+                            "approved": False,
+                            "reject_reason": f"Analysis error: {str(e)}",
+                            "category": "unknown",
+                            "emotion": "unknown",
+                            "angle": "unknown",
+                            "face_visible": False,
+                            "face_quality": "unknown",
+                            "notes": None,
+                        }
+
+                analyses.append(analysis)
+                is_approved = analysis.get("approved", False)
+
+                cat      = analysis.get("category", "unknown")
+                emotion  = analysis.get("emotion",  "unknown")
+                angle    = analysis.get("angle",    "unknown")
+                quality  = analysis.get("face_quality", "unknown")
+                reason   = analysis.get("reject_reason", "")
+
+                status = "✓" if is_approved else "✗"
+                print(f"[Curator]   {status} {cat} | {emotion} | {angle} | {quality}"
+                      + (f" | REJECT: {reason}" if not is_approved else ""))
+
+                if is_approved:
+                    approved_list.append(analysis)
+                    if move_files and os.path.exists(img_path):
+                        shutil.move(img_path, os.path.join(approved_dir, fname))
+                else:
+                    rejected_list.append(analysis)
+                    if move_files and os.path.exists(img_path):
+                        shutil.move(img_path, os.path.join(rejected_dir, fname))
+
+            # ── Dataset-Slot-Analyse ────────────────────────────────────────
+            slot_report = []
+            needs_slots = 0
+
+            if dataset_version != "Nur Qualitaetspruefung":
+                schema = DATASET_SCHEMA_V1 if "V1" in dataset_version else DATASET_SCHEMA_V2
+
+                # Zähle approved Bilder pro Kategorie
+                counts = {"close_up": 0, "upper_body": 0, "full_body": 0, "back_side": 0}
+                for a in approved_list:
+                    cat = a.get("category", "unknown")
+                    if cat in counts:
+                        counts[cat] += 1
+
+                slot_report.append(f"\nDataset-Slots ({dataset_version}):")
+                for cat, spec in schema.items():
+                    total    = spec["total"]
+                    have     = counts.get(cat, 0)
+                    missing  = max(0, total - have)
+                    needs_slots += missing
+                    bar = "█" * have + "░" * missing
+                    slot_report.append(f"  {cat:12} [{bar}] {have}/{total}"
+                                       + (" ✓" if missing == 0 else f" → {missing} fehlen"))
+
+                # Pflicht-Emotionen prüfen (V1 close_up)
+                if "V1" in dataset_version:
+                    required_slots = [s for s in DATASET_SCHEMA_V1["close_up"]["slots"]
+                                      if s.get("required")]
+                    slot_report.append(f"\nPflicht-Emotionen (close_up):")
+                    for slot in required_slots:
+                        found = any(
+                            a.get("category") == "close_up"
+                            and a.get("emotion") == slot["emotion"]
+                            and a.get("angle") == slot["angle"]
+                            for a in approved_list
+                        )
+                        mark = "✓" if found else "✗ FEHLT"
+                        slot_report.append(f"  {mark} {slot['angle']:25} {slot['emotion']}")
+
+            # ── Gesamt-Report ───────────────────────────────────────────────
+            report_lines = [
+                f"Dataset Curation Report",
+                f"Ordner: {folder}",
+                f"Gesamt: {len(image_files)} | Approved: {len(approved_list)} | Rejected: {len(rejected_list)}",
+                "",
+                "APPROVED:",
+            ]
+            for a in approved_list:
+                report_lines.append(
+                    f"  {a['filename']:30} {a.get('category','?'):12} "
+                    f"{a.get('emotion','?'):12} {a.get('angle','?')}"
+                )
+            report_lines += ["", "REJECTED:"]
+            for a in rejected_list:
+                report_lines.append(
+                    f"  {a['filename']:30} {a.get('reject_reason','?')}"
+                )
+            report_lines += slot_report
+
+            # JSON-Gesamtreport speichern
+            report_path = os.path.join(folder, "curation_report.json")
+            with open(report_path, "w") as f:
+                _json.dump({
+                    "approved": approved_list,
+                    "rejected": rejected_list,
+                    "summary": {
+                        "total": len(image_files),
+                        "approved": len(approved_list),
+                        "rejected": len(rejected_list),
+                        "needs_slots": needs_slots,
+                    }
+                }, f, indent=2, ensure_ascii=False)
+
+            report = "\n".join(report_lines)
+            print(f"\n[Curator] Report gespeichert: {report_path}")
+            print(report)
+            return (report, len(approved_list), len(rejected_list), needs_slots)

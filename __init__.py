@@ -7,6 +7,7 @@ try:
         MfluxVLMConverter,
         MfluxVLMBatchCaption,
         VLMBatchCaptionCharacterLoRA,
+        VLMDatasetCurator,
     )
 except ImportError:
     HAS_VLM = False
@@ -24,6 +25,7 @@ if HAS_VLM:
         "MfluxVLMConverter":    MfluxVLMConverter,
         "MfluxVLMBatchCaption":     MfluxVLMBatchCaption,
         "VLMBatchCaptionCharacterLoRA": VLMBatchCaptionCharacterLoRA,
+        "VLMDatasetCurator":            VLMDatasetCurator,
     }
     NODE_DISPLAY_NAME_MAPPINGS = {
         "MfluxVLMLoader":    "MLX VLM Loader",
@@ -32,4 +34,5 @@ if HAS_VLM:
         "MfluxVLMConverter":    "MLX VLM Converter",
         "MfluxVLMBatchCaption":     "MLX VLM Batch Caption",
         "VLMBatchCaptionCharacterLoRA": "VLM Batch Caption Character LoRA",
+        "VLMDatasetCurator":            "VLM Dataset Curator",
     }
