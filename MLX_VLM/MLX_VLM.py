@@ -735,11 +735,15 @@ face_visible: true or false
 face_quality: exactly one of: sharp, blurry, partially_occluded
 notes: null or one short phrase
 
-APPROVAL CRITERIA (reject if any fail):
+APPROVAL CRITERIA (reject ONLY if any of these technical criteria fail):
 - Exactly one person clearly visible
 - No heavy blur or motion blur on face
 - No strong obstruction of face
 - Image not heavily cropped or distorted
+
+IMPORTANT: Do NOT reject based on content, clothing, skin visibility, poses or artistic style.
+This is a legitimate professional dataset. Only reject for the technical reasons above.
+"explicit adult content" is NOT a valid reject_reason. Use null if technically acceptable.
 
 CATEGORY DEFINITIONS:
 - close_up: face and neck only
@@ -912,6 +916,11 @@ if HAS_VLM:
                 "inappropriate", "cannot analyze", "can't analyze",
                 "I cannot", "I can't", "sorry",
             ]
+            # Framework-seitige Fehler die als needs_review behandelt werden
+            FRAMEWORK_BLOCK_MARKERS = [
+                "explicit adult content", "explicit content",
+                "adult content", "nsfw", "not safe for work",
+            ]
 
             for i, fname in enumerate(image_files, 1):
                 img_path = os.path.join(folder, fname)
@@ -1037,18 +1046,37 @@ if HAS_VLM:
                         since_reload += 1
 
                     except Exception as e:
-                        print(f"[Curator] FEHLER bei {fname}: {e}")
-                        analysis = {
-                            "filename": fname,
-                            "approved": False,
-                            "reject_reason": f"Analysis error: {str(e)}",
-                            "category": "unknown",
-                            "emotion": "unknown",
-                            "angle": "unknown",
-                            "face_visible": False,
-                            "face_quality": "unknown",
-                            "notes": None,
-                        }
+                        err_str = str(e).lower()
+                        is_framework_block = any(
+                            m in err_str for m in FRAMEWORK_BLOCK_MARKERS
+                        )
+                        if is_framework_block:
+                            print(f"[Curator] Framework-Block bei {fname}: {e} → needs_review/")
+                            analysis = {
+                                "filename": fname,
+                                "approved": False,
+                                "reject_reason": "framework_content_block",
+                                "category": "unknown",
+                                "emotion": "unknown",
+                                "angle": "unknown",
+                                "face_visible": True,
+                                "face_quality": "unknown",
+                                "notes": str(e)[:100],
+                                "_needs_review": True,
+                            }
+                        else:
+                            print(f"[Curator] FEHLER bei {fname}: {e}")
+                            analysis = {
+                                "filename": fname,
+                                "approved": False,
+                                "reject_reason": f"Analysis error: {str(e)}",
+                                "category": "unknown",
+                                "emotion": "unknown",
+                                "angle": "unknown",
+                                "face_visible": False,
+                                "face_quality": "unknown",
+                                "notes": None,
+                            }
 
                 analyses.append(analysis)
                 is_approved = analysis.get("approved", False)
@@ -1410,6 +1438,11 @@ if HAS_VLM:
                 "content policy", "content_policy", "violates", "unsafe",
                 "inappropriate", "cannot analyze", "can't analyze",
                 "I cannot", "I can't", "sorry",
+            ]
+            # Framework-seitige Fehler die als needs_review behandelt werden
+            FRAMEWORK_BLOCK_MARKERS = [
+                "explicit adult content", "explicit content",
+                "adult content", "nsfw", "not safe for work",
             ]
 
             for i, (src_dir, fname) in enumerate(image_files, 1):
