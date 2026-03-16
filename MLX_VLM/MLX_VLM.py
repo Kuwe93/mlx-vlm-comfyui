@@ -797,16 +797,112 @@ DATASET_SCHEMA_V1 = {
             {"angle": "from_above",         "emotion": "confident",  "required": False},
         ]
     },
-    "upper_body": {"total": 8},
-    "full_body":  {"total": 6},
-    "back_side":  {"total": 4},
+    "upper_body": {
+        "total": 8,
+        "slots": [
+            {"angle": "frontal",            "emotion": "neutral",     "required": True},
+            {"angle": "frontal",            "emotion": "joy",         "required": True},
+            {"angle": "three_quarter_left", "emotion": "confident",   "required": False},
+            {"angle": "three_quarter_right","emotion": "thoughtful",  "required": False},
+            {"angle": "frontal",            "emotion": "anger",       "required": False},
+            {"angle": "side_left",          "emotion": "neutral",     "required": False},
+            {"angle": "frontal",            "emotion": "excited",     "required": False},
+            {"angle": "from_above",         "emotion": "neutral",     "required": False},
+        ]
+    },
+    "full_body": {
+        "total": 6,
+        "slots": [
+            {"angle": "frontal",            "emotion": "neutral",     "required": True},
+            {"angle": "frontal",            "emotion": "joy",         "required": True},
+            {"angle": "three_quarter_left", "emotion": "neutral",     "required": False},
+            {"angle": "three_quarter_right","emotion": "confident",   "required": False},
+            {"angle": "side_left",          "emotion": "neutral",     "required": False},
+            {"angle": "frontal",            "emotion": "excited",     "required": False},
+        ]
+    },
+    "back_side": {
+        "total": 4,
+        "slots": [
+            {"angle": "back",               "emotion": None,  "required": True,
+             "note": "Rueckenansicht direkt"},
+            {"angle": "three_quarter_right","emotion": None,  "required": False,
+             "note": "3/4 hinten rechts"},
+            {"angle": "side_left",          "emotion": None,  "required": False,
+             "note": "90 Grad Seite links"},
+            {"angle": "side_right",         "emotion": None,  "required": False,
+             "note": "90 Grad Seite rechts"},
+        ]
+    },
 }
 
 DATASET_SCHEMA_V2 = {
-    "close_up":   {"total": 16},
-    "upper_body": {"total": 10},
-    "full_body":  {"total": 8},
-    "back_side":  {"total": 6},
+    "close_up": {
+        "total": 16,
+        "slots": [
+            {"angle": "frontal",            "emotion": "neutral",     "required": True},
+            {"angle": "frontal",            "emotion": "joy",         "required": True},
+            {"angle": "three_quarter_left", "emotion": "anger",       "required": True},
+            {"angle": "three_quarter_right","emotion": "fear",        "required": True},
+            {"angle": "from_above",         "emotion": "neutral",     "required": False},
+            {"angle": "from_below",         "emotion": "confident",   "required": False},
+            {"angle": "side_left",          "emotion": "neutral",     "required": False},
+            {"angle": "side_right",         "emotion": "sadness",     "required": True},
+            {"angle": "frontal",            "emotion": "relaxed",     "required": False},
+            {"angle": "three_quarter_right","emotion": "surprise",    "required": False},
+            {"angle": "three_quarter_left", "emotion": "excited",     "required": False},
+            {"angle": "from_above",         "emotion": "confident",   "required": False},
+            {"angle": "frontal",            "emotion": "anger",       "required": False},
+            {"angle": "three_quarter_left", "emotion": "neutral",     "required": False},
+            {"angle": "frontal",            "emotion": "thoughtful",  "required": False},
+            {"angle": "side_right",         "emotion": "joy",         "required": False},
+        ]
+    },
+    "upper_body": {
+        "total": 10,
+        "slots": [
+            {"angle": "frontal",            "emotion": "neutral",     "required": True},
+            {"angle": "frontal",            "emotion": "joy",         "required": True},
+            {"angle": "three_quarter_left", "emotion": "confident",   "required": False},
+            {"angle": "three_quarter_right","emotion": "thoughtful",  "required": False},
+            {"angle": "frontal",            "emotion": "anger",       "required": False},
+            {"angle": "side_left",          "emotion": "neutral",     "required": False},
+            {"angle": "frontal",            "emotion": "excited",     "required": False},
+            {"angle": "from_above",         "emotion": "neutral",     "required": False},
+            {"angle": "side_right",         "emotion": "neutral",     "required": False},
+            {"angle": "frontal",            "emotion": "sadness",     "required": False},
+        ]
+    },
+    "full_body": {
+        "total": 8,
+        "slots": [
+            {"angle": "frontal",            "emotion": "neutral",     "required": True},
+            {"angle": "frontal",            "emotion": "joy",         "required": True},
+            {"angle": "three_quarter_left", "emotion": "neutral",     "required": False},
+            {"angle": "three_quarter_right","emotion": "confident",   "required": False},
+            {"angle": "side_left",          "emotion": "neutral",     "required": False},
+            {"angle": "frontal",            "emotion": "excited",     "required": False},
+            {"angle": "frontal",            "emotion": "anger",       "required": False},
+            {"angle": "three_quarter_right","emotion": "neutral",     "required": False},
+        ]
+    },
+    "back_side": {
+        "total": 6,
+        "slots": [
+            {"angle": "back",               "emotion": None,  "required": True,
+             "note": "Rueckenansicht direkt – Haarfarbe A"},
+            {"angle": "three_quarter_right","emotion": None,  "required": False,
+             "note": "3/4 hinten rechts – Haarfarbe A"},
+            {"angle": "side_left",          "emotion": None,  "required": False,
+             "note": "90 Grad Seite – Haarfarbe A"},
+            {"angle": "back",               "emotion": None,  "required": True,
+             "note": "Rueckenansicht direkt – Haarfarbe B"},
+            {"angle": "three_quarter_left", "emotion": None,  "required": False,
+             "note": "3/4 hinten links – Haarfarbe B"},
+            {"angle": "side_right",         "emotion": None,  "required": False,
+             "note": "90 Grad Seite – Haarfarbe B"},
+        ]
+    },
 }
 
 
@@ -1296,20 +1392,114 @@ if HAS_VLM:
                     slot_report.append(f"  {cat:12} [{bar}] {have}/{total}"
                                        + (" ✓" if missing == 0 else f" → {missing} fehlen"))
 
-                # Pflicht-Emotionen prüfen (V1 close_up)
-                if "V1" in dataset_version:
-                    required_slots = [s for s in DATASET_SCHEMA_V1["close_up"]["slots"]
-                                      if s.get("required")]
-                    slot_report.append(f"\nPflicht-Emotionen (close_up):")
-                    for slot in required_slots:
-                        found = any(
-                            a.get("category") == "close_up"
-                            and a.get("emotion") == slot["emotion"]
-                            and a.get("angle") == slot["angle"]
-                            for a in approved_list
+                # Detaillierte Slot-Analyse für alle Kategorien
+                for cat, spec in schema.items():
+                    if cat.startswith("_") or "slots" not in spec:
+                        continue
+                    slots        = spec["slots"]
+                    cat_approved = [a for a in approved_list if a.get("category") == cat]
+                    have_count   = len(cat_approved)
+                    total_count  = spec["total"]
+                    is_back      = (cat == "back_side")
+
+                    slot_report.append(f"\n  {cat} Slots ({have_count}/{total_count}):")
+
+                    used_in_slot = set()
+                    for slot in slots:
+                        req     = slot.get("required", False)
+                        emotion = slot.get("emotion")   # kann None sein (back_side)
+                        angle   = slot.get("angle")
+                        note    = slot.get("note", "")
+                        req_mark = "✦" if req else ""
+
+                        # Kandidaten: bei back_side nur Winkel prüfen, keine Emotion
+                        if is_back or emotion is None:
+                            candidates = [
+                                a for a in cat_approved
+                                if a.get("angle") == angle
+                                and a["filename"] not in used_in_slot
+                            ]
+                        else:
+                            candidates = [
+                                a for a in cat_approved
+                                if a.get("emotion") == emotion
+                                and a.get("angle")  == angle
+                                and a["filename"]   not in used_in_slot
+                            ]
+
+                        emotion_label = emotion if emotion else "(kein Gesicht)"
+
+                        if candidates:
+                            best = max(candidates, key=lambda a: a.get("quality_score", 0))
+                            used_in_slot.add(best["filename"])
+                            qs   = best.get("quality_score", "?")
+                            hc   = best.get("hair_color", "?")
+                            slot_report.append(
+                                f"    ✓{req_mark} {angle:25} {emotion_label:12} "
+                                f"Q:{qs:>3}  {hc:15} ({best['filename']})"
+                            )
+                        else:
+                            # Fallback nur wenn Emotion gesetzt
+                            fallback_found = False
+                            if emotion and not is_back:
+                                emotion_only = [
+                                    a for a in cat_approved
+                                    if a.get("emotion") == emotion
+                                    and a["filename"]   not in used_in_slot
+                                ]
+                                if emotion_only:
+                                    best = max(emotion_only,
+                                               key=lambda a: a.get("quality_score", 0))
+                                    used_in_slot.add(best["filename"])
+                                    slot_report.append(
+                                        f"    ~{req_mark} {angle:25} {emotion_label:12} "
+                                        f"→ Fallback-Winkel: {best.get('angle','?')} "
+                                        f"({best['filename']})"
+                                    )
+                                    fallback_found = True
+                            if not fallback_found:
+                                fehlt = "✗ FEHLT" + req_mark
+                                note_str = f"  [{note}]" if note else ""
+                                slot_report.append(
+                                    f"    {fehlt:12} {angle:25} {emotion_label}{note_str}"
+                                )
+
+                    # Überschuss
+                    unmatched = [a for a in cat_approved
+                                 if a["filename"] not in used_in_slot]
+                    if unmatched:
+                        slot_report.append(
+                            f"    + {len(unmatched)} weitere ohne spezifischen Slot"
                         )
-                        mark = "✓" if found else "✗ FEHLT"
-                        slot_report.append(f"  {mark} {slot['angle']:25} {slot['emotion']}")
+
+                # V2: Haarfarben-Balance pro Kategorie prüfen
+                if "V2" in dataset_version:
+                    # Ermittle die zwei häufigsten Haarfarben
+                    all_hair = {}
+                    for a in approved_list:
+                        hc = a.get("hair_color", "not_visible")
+                        if hc not in ("not_visible", "other", "unknown"):
+                            all_hair[hc] = all_hair.get(hc, 0) + 1
+                    top2 = sorted(all_hair, key=lambda c: all_hair[c], reverse=True)[:2]
+
+                    if top2:
+                        slot_report.append(f"\nV2 Haarfarben-Balance (Ziel: je 20 pro Farbe):")
+                        for cat, spec in schema.items():
+                            if cat.startswith("_"):
+                                continue
+                            cat_total = spec["total"]
+                            per_color = cat_total // 2
+                            slot_report.append(f"  {cat} (je {per_color}x):")
+                            for color in top2:
+                                have_c = sum(1 for a in approved_list
+                                             if a.get("category") == cat
+                                             and a.get("hair_color") == color)
+                                miss_c = max(0, per_color - have_c)
+                                bar    = "█" * have_c + "░" * miss_c
+                                slot_report.append(
+                                    f"    {color:20} [{bar}] {have_c}/{per_color}"
+                                    + (" ✓" if miss_c == 0 else f" → {miss_c} fehlen")
+                                )
 
                 # Crop-Potential Hinweise wenn close_up fehlt
                 close_up_missing = max(0, schema.get("close_up", {}).get("total", 0)
