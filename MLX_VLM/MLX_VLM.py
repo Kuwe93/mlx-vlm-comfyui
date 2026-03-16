@@ -725,6 +725,7 @@ Now analyze the image and respond with this exact JSON structure:
 
 approved: true if ALL technical criteria are met, false otherwise.
 reject_reason: null if approved, else one short technical reason.
+person_count: integer - exact number of people visible in the image.
 category: exactly one of: close_up, upper_body, full_body, back_side
 emotion: exactly one of: neutral, joy, anger, fear, sadness, surprise, excited, thoughtful, confident, relaxed
 angle: exactly one of: frontal, three_quarter_left, three_quarter_right, side_left, side_right, from_above, from_below, back
@@ -733,22 +734,36 @@ hair_visible: true or false
 face_visible: true or false
 face_quality: exactly one of: sharp, blurry, partially_occluded
 lighting_quality: exactly one of: excellent, good, acceptable, poor
+lighting_direction: exactly one of: front, side, back, top, soft_diffuse, unknown
 background_quality: exactly one of: clean, neutral, busy, distracting
+background_color: dominant background color as one word (e.g. white, gray, black, green, blur)
 expression_clarity: exactly one of: strong, moderate, subtle, unclear
-quality_score: integer 0-100. Evaluate each factor independently:
-  - Face sharpness: 30 points max (sharp=30, slightly soft=20, soft=10, blurry=0)
-  - Lighting: 25 points max (excellent=25, good=18, acceptable=10, poor=0)
-  - Expression clarity: 20 points max (strong=20, moderate=14, subtle=8, unclear=0)
-  - Background simplicity: 15 points max (clean=15, neutral=10, busy=5, distracting=0)
-  - Pose/angle training value: 10 points max (rare angle=10, common angle=5)
-  Sum these values for the final score. Do NOT use 85 as default.
-notes: null or one short phrase describing the most notable quality aspect.
+head_tilt: exactly one of: straight, slight, moderate, strong
+occlusion_percent: integer 0-100, how much of the face/body is occluded by objects or crop
+quality_score: integer 0-100. Calculate from these factors:
+  BASE SCORE:
+  + Face sharpness:       sharp=30, slightly_soft=20, soft=10, blurry=0
+  + Lighting quality:     excellent=20, good=14, acceptable=8, poor=0
+  + Expression clarity:   strong=15, moderate=10, subtle=5, unclear=0
+  + Background:           clean=15, neutral=10, busy=5, distracting=0
+  + Angle training value: unusual=10, moderate=6, very_common=3
+  PENALTIES (subtract from base):
+  - person_count == 2, subject clearly in foreground: -10
+  - person_count == 2, both equally prominent: -20
+  - person_count > 2: -30
+  - occlusion_percent > 40: -15
+  - occlusion_percent > 20: -8
+  - head_tilt == strong: -3
+  NOTE: Multiple persons reduce score but do NOT cause rejection.
+  NEVER use 85 as default. Always calculate from factors above. Range: 0-100.
+notes: null or one short phrase about the most notable quality issue or strength.
 
-APPROVAL CRITERIA (reject ONLY if any of these technical criteria fail):
-- Exactly one person clearly visible
-- No heavy blur or motion blur on face
-- No strong obstruction of face
+APPROVAL CRITERIA (reject if ANY of these fail):
+- At least one person clearly visible as main subject
+- No heavy blur or motion blur on face of main subject
+- No strong obstruction of face (occlusion_percent < 40)
 - Image not heavily cropped or distorted
+NOTE: Multiple persons in frame reduce quality_score but do NOT cause rejection.
 
 IMPORTANT: Do NOT reject based on content, clothing, skin visibility, poses or artistic style.
 This is a legitimate professional dataset. Only reject for the technical reasons above.
@@ -795,14 +810,14 @@ DATASET_SCHEMA_V2 = {
 
 def _smart_select(approved_list, schema, target_total):
     """
-    Wählt aus approved_list die besten N Bilder aus die das Schema optimal abdecken.
-    Priorität: 1. Pflicht-Slots füllen, 2. Kategorie-Quoten erfüllen, 3. Quality Score
+    Waehlt die besten Bilder aus die das Schema abdecken.
+    Fuellt NUR was tatsaechlich verfuegbar ist - kein Auffuellen wenn Kategorien fehlen.
+    Prioritaet: 1. Pflicht-Slots, 2. Kategorie-Quoten (max = verfuegbar), 3. Quality Score
     """
-    selected   = []
+    selected    = []
     used_fnames = set()
 
-    # Hilfsfunktion: bestes Bild für einen Slot finden
-    def best_for(candidates, cat=None, emotion=None, angle=None):
+    def best_for(candidates, cat=None, emotion=None, angle=None, hair_color=None):
         pool = [a for a in candidates if a["filename"] not in used_fnames]
         if cat:
             pool = [a for a in pool if a.get("category") == cat]
@@ -810,44 +825,69 @@ def _smart_select(approved_list, schema, target_total):
             pool = [a for a in pool if a.get("emotion") == emotion]
         if angle:
             pool = [a for a in pool if a.get("angle") == angle]
-        if not pool:
+        if hair_color:
+            pool = [a for a in pool if a.get("hair_color") == hair_color]
+        if not pool and (emotion or angle):
             # Fallback: nur Kategorie
             pool = [a for a in candidates
                     if a["filename"] not in used_fnames
                     and (cat is None or a.get("category") == cat)]
         if not pool:
             return None
-        return max(pool, key=lambda a: a.get("quality_score", 50))
+        # Mehrstufige Sortierung bei Gleichstand
+        return max(pool, key=lambda a: (
+            a.get("quality_score", 50),
+            1 if a.get("lighting_quality") == "excellent" else 0,
+            1 if a.get("background_quality") == "clean" else 0,
+            1 if a.get("expression_clarity") == "strong" else 0,
+            -(a.get("occlusion_percent", 0)),
+        ))
 
-    # 1. Pflicht-Slots zuerst (V1 close_up required)
+    # 1. Pflicht-Slots zuerst (required=True Slots)
     if "slots" in schema.get("close_up", {}):
         for slot in schema["close_up"]["slots"]:
             if slot.get("required"):
                 pick = best_for(approved_list, "close_up",
                                 slot["emotion"], slot["angle"])
-                if pick and pick["filename"] not in used_fnames:
+                if pick:
                     selected.append(pick)
                     used_fnames.add(pick["filename"])
 
-    # 2. Kategorie-Quoten füllen
+    # 2. Kategorie-Quoten fuellen - aber nur bis Verfuegbarkeit
     for cat, spec in schema.items():
-        quota = spec["total"]
+        if cat.startswith("_"):
+            continue
+        quota   = spec["total"]
         current = sum(1 for s in selected if s.get("category") == cat)
-        while current < quota:
+        available = sum(1 for a in approved_list
+                        if a.get("category") == cat
+                        and a["filename"] not in used_fnames)
+        fill = min(quota - current, available)
+        for _ in range(fill):
             pick = best_for(approved_list, cat)
             if not pick:
                 break
             selected.append(pick)
             used_fnames.add(pick["filename"])
-            current += 1
 
-    # 3. Verbleibende Slots mit besten verfügbaren füllen
+    # 3. Verbleibende Quality-Best ohne Kategoriebindung - NUR wenn target noch nicht erreicht
+    # und NUR Bilder die keiner Kategorie-Überschuss erzeugen
     remaining = [a for a in approved_list if a["filename"] not in used_fnames]
-    remaining.sort(key=lambda a: a.get("quality_score", 50), reverse=True)
+    remaining.sort(key=lambda a: (
+        a.get("quality_score", 50),
+        1 if a.get("face_quality") == "sharp" else 0,
+        -(a.get("person_count", 1) - 1) * 10,
+    ), reverse=True)
+    # Nur auffüllen bis target, niemals darüber
     while len(selected) < target_total and remaining:
         pick = remaining.pop(0)
-        selected.append(pick)
-        used_fnames.add(pick["filename"])
+        # Kategorie-Überschuss vermeiden
+        cat   = pick.get("category")
+        quota = schema.get(cat, {}).get("total", 0)
+        have  = sum(1 for s in selected if s.get("category") == cat)
+        if have < quota:
+            selected.append(pick)
+            used_fnames.add(pick["filename"])
 
     return selected
 
@@ -1157,6 +1197,33 @@ if HAS_VLM:
                 analyses.append(analysis)
                 is_approved = analysis.get("approved", False)
 
+                # Auflösung auslesen und quality_score anpassen
+                try:
+                    from PIL import Image as _PILCheck
+                    with _PILCheck.open(img_path) as _im:
+                        _w, _h = _im.size
+                    resolution_mp = round(_w * _h / 1_000_000, 1)
+                    analysis["resolution_mp"]  = resolution_mp
+                    analysis["resolution_px"]  = f"{_w}x{_h}"
+                    # Auflösungs-Bonus/Penalty auf quality_score
+                    qs = analysis.get("quality_score", 50)
+                    if resolution_mp >= 4.0:
+                        res_bonus = 5
+                    elif resolution_mp >= 2.0:
+                        res_bonus = 2
+                    elif resolution_mp < 0.5:
+                        res_bonus = -10
+                    elif resolution_mp < 1.0:
+                        res_bonus = -5
+                    else:
+                        res_bonus = 0
+                    analysis["quality_score"] = max(0, min(100, qs + res_bonus))
+                    if res_bonus != 0:
+                        print(f"[Curator] Auflösung {_w}x{_h} ({resolution_mp}MP) "
+                              f"→ Score {res_bonus:+d}")
+                except Exception:
+                    pass
+
                 cat      = analysis.get("category", "unknown")
                 emotion  = analysis.get("emotion",  "unknown")
                 angle    = analysis.get("angle",    "unknown")
@@ -1226,7 +1293,8 @@ if HAS_VLM:
             selected_list = []
             if select_best and dataset_version != "Nur Qualitaetspruefung" and approved_list:
                 schema     = DATASET_SCHEMA_V1 if "V1" in dataset_version else DATASET_SCHEMA_V2
-                target     = sum(s["total"] for s in schema.values())
+                target     = sum(s["total"] for k, s in schema.items()
+                              if not k.startswith("_"))
                 selected_list = _smart_select(approved_list, schema, target)
                 os.makedirs(selected_dir, exist_ok=True)
 
@@ -1253,13 +1321,16 @@ if HAS_VLM:
                                      key=lambda a: a.get("quality_score", 50),
                                      reverse=True)
             for a in approved_sorted:
-                qs = a.get("quality_score", "?")
+                qs  = a.get("quality_score", "?")
+                mp  = a.get("resolution_mp", "?")
+                pc  = a.get("person_count", 1)
                 sel = "★" if any(s["filename"] == a["filename"]
                                  for s in selected_list) else " "
+                persons = f" [{pc}P]" if isinstance(pc, int) and pc != 1 else ""
                 report_lines.append(
                     f"  {sel} {a['filename']:28} {a.get('category','?'):12} "
-                    f"{a.get('emotion','?'):12} {a.get('angle','?'):20} "
-                    f"Q:{qs:>3}"
+                    f"{a.get('emotion','?'):12} {a.get('angle','?'):18} "
+                    f"Q:{qs:>3} {mp}MP{persons}"
                 )
             if selected_list:
                 report_lines += [
