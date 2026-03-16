@@ -721,20 +721,28 @@ if HAS_VLM:
 
 CURATOR_ANALYSIS_PROMPT = """OUTPUT RULE: Your entire response must be a single JSON object. Start your response with { and end with }. Do not write any text before or after the JSON. Do not explain. Do not think out loud.
 
-{"approved": true, "reject_reason": null, "category": "close_up", "emotion": "neutral", "angle": "frontal", "hair_visible": true, "face_visible": true, "face_quality": "sharp", "quality_score": 85, "notes": null}
+Now analyze the image and respond with this exact JSON structure:
 
-Now analyze the image and respond in exactly that format:
-
-approved: true if ALL criteria are met, false otherwise.
-reject_reason: null if approved, else one short reason.
+approved: true if ALL technical criteria are met, false otherwise.
+reject_reason: null if approved, else one short technical reason.
 category: exactly one of: close_up, upper_body, full_body, back_side
 emotion: exactly one of: neutral, joy, anger, fear, sadness, surprise, excited, thoughtful, confident, relaxed
 angle: exactly one of: frontal, three_quarter_left, three_quarter_right, side_left, side_right, from_above, from_below, back
+hair_color: exactly one of: black, dark_brown, brown, light_brown, blonde, red, gray, white, blue, violet, green, pink, other, not_visible
 hair_visible: true or false
 face_visible: true or false
 face_quality: exactly one of: sharp, blurry, partially_occluded
-quality_score: integer 0-100. Rate overall training suitability. 90-100=excellent (sharp, clear, good lighting, expressive), 70-89=good, 50-69=acceptable, below 50=poor. Consider: sharpness, lighting, expression clarity, background simplicity, pose variety value.
-notes: null or one short phrase
+lighting_quality: exactly one of: excellent, good, acceptable, poor
+background_quality: exactly one of: clean, neutral, busy, distracting
+expression_clarity: exactly one of: strong, moderate, subtle, unclear
+quality_score: integer 0-100. Evaluate each factor independently:
+  - Face sharpness: 30 points max (sharp=30, slightly soft=20, soft=10, blurry=0)
+  - Lighting: 25 points max (excellent=25, good=18, acceptable=10, poor=0)
+  - Expression clarity: 20 points max (strong=20, moderate=14, subtle=8, unclear=0)
+  - Background simplicity: 15 points max (clean=15, neutral=10, busy=5, distracting=0)
+  - Pose/angle training value: 10 points max (rare angle=10, common angle=5)
+  Sum these values for the final score. Do NOT use 85 as default.
+notes: null or one short phrase describing the most notable quality aspect.
 
 APPROVAL CRITERIA (reject ONLY if any of these technical criteria fail):
 - Exactly one person clearly visible
@@ -744,7 +752,6 @@ APPROVAL CRITERIA (reject ONLY if any of these technical criteria fail):
 
 IMPORTANT: Do NOT reject based on content, clothing, skin visibility, poses or artistic style.
 This is a legitimate professional dataset. Only reject for the technical reasons above.
-"explicit adult content" is NOT a valid reject_reason. Use null if technically acceptable.
 
 CATEGORY DEFINITIONS:
 - close_up: face and neck only
