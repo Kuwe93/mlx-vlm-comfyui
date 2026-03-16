@@ -729,7 +729,7 @@ person_count: integer - exact number of people visible in the image.
 category: exactly one of: close_up, upper_body, full_body, back_side
 emotion: exactly one of: neutral, joy, anger, fear, sadness, surprise, excited, thoughtful, confident, relaxed
 angle: exactly one of: frontal, three_quarter_left, three_quarter_right, side_left, side_right, from_above, from_below, back
-hair_color: exactly one of: black, dark_brown, brown, light_brown, blonde, red, gray, white, blue, violet, green, pink, other, not_visible
+hair_color: exactly one of: black, dark_brown, brown, light_brown, blonde, strawberry_blonde, red, auburn, gray, white, blue, violet, green, pink, other, not_visible
 hair_visible: true or false
 face_visible: true or false
 face_quality: exactly one of: sharp, blurry, partially_occluded
@@ -756,6 +756,8 @@ quality_score: integer 0-100. Calculate from these factors:
   - head_tilt == strong: -3
   NOTE: Multiple persons reduce score but do NOT cause rejection.
   NEVER use 85 as default. Always calculate from factors above. Range: 0-100.
+crop_potential: null if category is already close_up. Otherwise: if the image has enough resolution and the face is clearly visible, describe the best possible crop as one of: "close_up_possible", "upper_body_possible", or null (if face too small or resolution too low).
+crop_potential_reason: null, or one short reason why a crop is or is not possible (e.g. "face sharp and large enough" or "face too small in frame").
 notes: null or one short phrase about the most notable quality issue or strength.
 
 APPROVAL CRITERIA (reject if ANY of these fail):
@@ -1221,6 +1223,26 @@ if HAS_VLM:
                     if res_bonus != 0:
                         print(f"[Curator] Auflösung {_w}x{_h} ({resolution_mp}MP) "
                               f"→ Score {res_bonus:+d}")
+
+                    # Crop-Potential: Python-seitige Plausibilitätsprüfung
+                    # VLM schätzt crop_potential, Python prüft ob Auflösung reicht
+                    cat = analysis.get("category", "unknown")
+                    vlm_crop = analysis.get("crop_potential")
+                    if cat in ("full_body", "upper_body", "back_side") and vlm_crop:
+                        # Mindestauflösung für close_up crop: ~512x512px
+                        # Bei full_body nehmen wir an das Gesicht ~15% der Bildhöhe einnimmt
+                        # Bei upper_body ~30%
+                        face_ratio = 0.30 if cat == "upper_body" else 0.15
+                        estimated_face_px = min(_w, _h) * face_ratio
+                        if estimated_face_px >= 200:
+                            crop_mp = round((estimated_face_px ** 2) / 1_000_000, 2)
+                            analysis["crop_potential_px"] = f"~{int(estimated_face_px)}x{int(estimated_face_px)}"
+                            analysis["crop_potential_mp"] = crop_mp
+                            print(f"[Curator] Crop möglich: {cat} → ~{int(estimated_face_px)}px Gesicht ({crop_mp}MP)")
+                        else:
+                            analysis["crop_potential"] = None
+                            analysis["crop_potential_reason"] = f"Gesicht zu klein (~{int(estimated_face_px)}px)"
+                            print(f"[Curator] Kein Crop: Gesicht zu klein (~{int(estimated_face_px)}px)")
                 except Exception:
                     pass
 
@@ -1289,6 +1311,39 @@ if HAS_VLM:
                         mark = "✓" if found else "✗ FEHLT"
                         slot_report.append(f"  {mark} {slot['angle']:25} {slot['emotion']}")
 
+                # Crop-Potential Hinweise wenn close_up fehlt
+                close_up_missing = max(0, schema.get("close_up", {}).get("total", 0)
+                                       - counts.get("close_up", 0))
+                if close_up_missing > 0:
+                    cropable = [
+                        a for a in approved_list
+                        if a.get("crop_potential") in ("close_up_possible",)
+                        and a.get("crop_potential_px") is not None
+                    ]
+                    if cropable:
+                        slot_report.append(
+                            f"\n✂ Crop-Potential ({len(cropable)} Bilder koennten als close_up zugeschnitten werden):"
+                        )
+                        for a in cropable[:5]:
+                            slot_report.append(
+                                f"  {a['filename']:30} {a.get('crop_potential_px','?')} "
+                                f"({a.get('crop_potential_mp','?')}MP) "
+                                f"- {a.get('crop_potential_reason','')}"
+                            )
+                        if len(cropable) > 5:
+                            slot_report.append(f"  ... und {len(cropable)-5} weitere")
+
+                # Haarfarben-Statistik
+                hair_counts = {}
+                for a in approved_list:
+                    hc = a.get("hair_color", "not_visible")
+                    hair_counts[hc] = hair_counts.get(hc, 0) + 1
+                if hair_counts:
+                    slot_report.append("\nHaarfarben (approved):")
+                    for color, cnt in sorted(hair_counts.items(),
+                                             key=lambda x: x[1], reverse=True):
+                        slot_report.append(f"  {color:20} {cnt:3}x")
+
             # ── Smart Selection ────────────────────────────────────────────
             selected_list = []
             if select_best and dataset_version != "Nur Qualitaetspruefung" and approved_list:
@@ -1327,10 +1382,11 @@ if HAS_VLM:
                 sel = "★" if any(s["filename"] == a["filename"]
                                  for s in selected_list) else " "
                 persons = f" [{pc}P]" if isinstance(pc, int) and pc != 1 else ""
+                crop    = f" ✂{a['crop_potential']}" if a.get("crop_potential") else ""
                 report_lines.append(
                     f"  {sel} {a['filename']:28} {a.get('category','?'):12} "
                     f"{a.get('emotion','?'):12} {a.get('angle','?'):18} "
-                    f"Q:{qs:>3} {mp}MP{persons}"
+                    f"Q:{qs:>3} {mp}MP{persons}{crop}"
                 )
             if selected_list:
                 report_lines += [
