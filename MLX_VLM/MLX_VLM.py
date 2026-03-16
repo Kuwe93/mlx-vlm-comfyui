@@ -721,7 +721,7 @@ if HAS_VLM:
 
 CURATOR_ANALYSIS_PROMPT = """OUTPUT RULE: Your entire response must be a single JSON object. Start your response with { and end with }. Do not write any text before or after the JSON. Do not explain. Do not think out loud.
 
-{"approved": true, "reject_reason": null, "category": "close_up", "emotion": "neutral", "angle": "frontal", "hair_visible": true, "face_visible": true, "face_quality": "sharp", "notes": null}
+{"approved": true, "reject_reason": null, "category": "close_up", "emotion": "neutral", "angle": "frontal", "hair_visible": true, "face_visible": true, "face_quality": "sharp", "quality_score": 85, "notes": null}
 
 Now analyze the image and respond in exactly that format:
 
@@ -733,6 +733,7 @@ angle: exactly one of: frontal, three_quarter_left, three_quarter_right, side_le
 hair_visible: true or false
 face_visible: true or false
 face_quality: exactly one of: sharp, blurry, partially_occluded
+quality_score: integer 0-100. Rate overall training suitability. 90-100=excellent (sharp, clear, good lighting, expressive), 70-89=good, 50-69=acceptable, below 50=poor. Consider: sharpness, lighting, expression clarity, background simplicity, pose variety value.
 notes: null or one short phrase
 
 APPROVAL CRITERIA (reject ONLY if any of these technical criteria fail):
@@ -785,6 +786,65 @@ DATASET_SCHEMA_V2 = {
 }
 
 
+def _smart_select(approved_list, schema, target_total):
+    """
+    Wählt aus approved_list die besten N Bilder aus die das Schema optimal abdecken.
+    Priorität: 1. Pflicht-Slots füllen, 2. Kategorie-Quoten erfüllen, 3. Quality Score
+    """
+    selected   = []
+    used_fnames = set()
+
+    # Hilfsfunktion: bestes Bild für einen Slot finden
+    def best_for(candidates, cat=None, emotion=None, angle=None):
+        pool = [a for a in candidates if a["filename"] not in used_fnames]
+        if cat:
+            pool = [a for a in pool if a.get("category") == cat]
+        if emotion:
+            pool = [a for a in pool if a.get("emotion") == emotion]
+        if angle:
+            pool = [a for a in pool if a.get("angle") == angle]
+        if not pool:
+            # Fallback: nur Kategorie
+            pool = [a for a in candidates
+                    if a["filename"] not in used_fnames
+                    and (cat is None or a.get("category") == cat)]
+        if not pool:
+            return None
+        return max(pool, key=lambda a: a.get("quality_score", 50))
+
+    # 1. Pflicht-Slots zuerst (V1 close_up required)
+    if "slots" in schema.get("close_up", {}):
+        for slot in schema["close_up"]["slots"]:
+            if slot.get("required"):
+                pick = best_for(approved_list, "close_up",
+                                slot["emotion"], slot["angle"])
+                if pick and pick["filename"] not in used_fnames:
+                    selected.append(pick)
+                    used_fnames.add(pick["filename"])
+
+    # 2. Kategorie-Quoten füllen
+    for cat, spec in schema.items():
+        quota = spec["total"]
+        current = sum(1 for s in selected if s.get("category") == cat)
+        while current < quota:
+            pick = best_for(approved_list, cat)
+            if not pick:
+                break
+            selected.append(pick)
+            used_fnames.add(pick["filename"])
+            current += 1
+
+    # 3. Verbleibende Slots mit besten verfügbaren füllen
+    remaining = [a for a in approved_list if a["filename"] not in used_fnames]
+    remaining.sort(key=lambda a: a.get("quality_score", 50), reverse=True)
+    while len(selected) < target_total and remaining:
+        pick = remaining.pop(0)
+        selected.append(pick)
+        used_fnames.add(pick["filename"])
+
+    return selected
+
+
 if HAS_VLM:
     class VLMDatasetCurator:
         @classmethod
@@ -815,6 +875,13 @@ if HAS_VLM:
                                     "tooltip": "Modell alle N Bilder neu laden gegen Repetition."}),
                 },
                 "optional": {
+                    "select_best": ("BOOLEAN", {
+                        "default": True,
+                        "label_on": "True", "label_off": "False",
+                        "tooltip": "Automatisch die besten N Bilder auswaehlen die das "
+                                   "Dataset-Schema optimal abdecken. N = Ziel-Anzahl laut Schema "
+                                   "(V1=30, V2=40). Bilder werden in selected/ verschoben.",
+                    }),
                     "thinking_budget": ("INT", {
                         "default": 100, "min": 1, "max": 2000, "step": 10,
                         "tooltip": (
@@ -853,14 +920,15 @@ if HAS_VLM:
                 },
             }
 
-        RETURN_TYPES = ("STRING", "INT", "INT", "INT", "INT")
-        RETURN_NAMES = ("report", "approved", "rejected", "needs_review", "needs_slots")
+        RETURN_TYPES = ("STRING", "INT", "INT", "INT", "INT", "INT")
+        RETURN_NAMES = ("report", "approved", "selected", "rejected", "needs_review", "needs_slots")
         CATEGORY     = "MFlux/VLM"
         FUNCTION     = "curate"
         OUTPUT_NODE  = True
 
         def curate(self, vlm_model, image_folder, dataset_version,
                    move_files, overwrite_analysis, reload_every,
+                   select_best=True,
                    thinking_budget=1, disable_thinking=True, max_tokens=400,
                    fallback_model_path="", custom_criteria=""):
             import json as _json
@@ -874,6 +942,7 @@ if HAS_VLM:
             approved_dir     = os.path.join(folder, "approved")
             rejected_dir     = os.path.join(folder, "rejected")
             needs_review_dir = os.path.join(folder, "needs_review")
+            selected_dir     = os.path.join(folder, "selected")
             analysis_dir     = os.path.join(folder, ".analysis")
             for d in [approved_dir, rejected_dir, needs_review_dir, analysis_dir]:
                 os.makedirs(d, exist_ok=True)
@@ -1146,6 +1215,23 @@ if HAS_VLM:
                         mark = "✓" if found else "✗ FEHLT"
                         slot_report.append(f"  {mark} {slot['angle']:25} {slot['emotion']}")
 
+            # ── Smart Selection ────────────────────────────────────────────
+            selected_list = []
+            if select_best and dataset_version != "Nur Qualitaetspruefung" and approved_list:
+                schema     = DATASET_SCHEMA_V1 if "V1" in dataset_version else DATASET_SCHEMA_V2
+                target     = sum(s["total"] for s in schema.values())
+                selected_list = _smart_select(approved_list, schema, target)
+                os.makedirs(selected_dir, exist_ok=True)
+
+                if move_files:
+                    import shutil as _shutil
+                    for a in selected_list:
+                        src = os.path.join(approved_dir, a["filename"])
+                        dst = os.path.join(selected_dir, a["filename"])
+                        if os.path.exists(src):
+                            _shutil.copy2(src, dst)
+                    print(f"[Curator] {len(selected_list)} Bilder in selected/ kopiert.")
+
             # ── Gesamt-Report ───────────────────────────────────────────────
             report_lines = [
                 f"Dataset Curation Report",
@@ -1155,11 +1241,30 @@ if HAS_VLM:
                 "",
                 "APPROVED:",
             ]
-            for a in approved_list:
+            # Nach quality_score sortiert anzeigen
+            approved_sorted = sorted(approved_list,
+                                     key=lambda a: a.get("quality_score", 50),
+                                     reverse=True)
+            for a in approved_sorted:
+                qs = a.get("quality_score", "?")
+                sel = "★" if any(s["filename"] == a["filename"]
+                                 for s in selected_list) else " "
                 report_lines.append(
-                    f"  {a['filename']:30} {a.get('category','?'):12} "
-                    f"{a.get('emotion','?'):12} {a.get('angle','?')}"
+                    f"  {sel} {a['filename']:28} {a.get('category','?'):12} "
+                    f"{a.get('emotion','?'):12} {a.get('angle','?'):20} "
+                    f"Q:{qs:>3}"
                 )
+            if selected_list:
+                report_lines += [
+                    "",
+                    f"SELECTED ({len(selected_list)} Bilder fuer Training – nach Schema + Quality):",
+                ]
+                for a in selected_list:
+                    qs = a.get("quality_score", "?")
+                    report_lines.append(
+                        f"  ★ {a['filename']:28} {a.get('category','?'):12} "
+                        f"{a.get('emotion','?'):12} Q:{qs:>3}"
+                    )
             report_lines += ["", "REJECTED:"]
             for a in rejected_list:
                 report_lines.append(
@@ -1174,13 +1279,21 @@ if HAS_VLM:
             # JSON-Gesamtreport speichern
             report_path = os.path.join(folder, "curation_report.json")
             with open(report_path, "w") as f:
+                # approved nach quality_score sortieren
+                approved_for_json = sorted(
+                    approved_list,
+                    key=lambda a: a.get("quality_score", 50),
+                    reverse=True
+                )
                 _json.dump({
-                    "approved":     approved_list,
+                    "selected":     selected_list,
+                    "approved":     approved_for_json,
                     "rejected":     rejected_list,
                     "needs_review": needs_review_list,
                     "summary": {
                         "total":        len(image_files),
                         "approved":     len(approved_list),
+                        "selected":     len(selected_list),
                         "rejected":     len(rejected_list),
                         "needs_review": len(needs_review_list),
                         "needs_slots":  needs_slots,
@@ -1190,8 +1303,8 @@ if HAS_VLM:
             report = "\n".join(report_lines)
             print(f"\n[Curator] Report gespeichert: {report_path}")
             print(report)
-            return (report, len(approved_list), len(rejected_list),
-                    len(needs_review_list), needs_slots)
+            return (report, len(approved_list), len(selected_list),
+                    len(rejected_list), len(needs_review_list), needs_slots)
 
 
 # ---------------------------------------------------------------------------
