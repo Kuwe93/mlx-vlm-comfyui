@@ -1102,16 +1102,34 @@ if HAS_VLM:
                 except Exception as e:
                     print(f"[Curator] Fallback-Modell konnte nicht geladen werden: {e}")
 
-            image_files = sorted([
-                f for f in os.listdir(folder)
-                if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
-                and not os.path.splitext(f)[0].lower().startswith("preview")
-            ])
+            # ── Alle bekannten Bilder sammeln ────────────────────────────
+            # Suche in Hauptordner UND allen Unterordnern (approved/rejected/needs_review)
+            # damit ein zweiter Lauf alle bisherigen Ergebnisse kennt
+            search_dirs = [
+                (folder,           "neu"),
+                (approved_dir,     "approved"),
+                (rejected_dir,     "rejected"),
+                (needs_review_dir, "needs_review"),
+            ]
+            # fname → (aktueller Pfad, Herkunft)
+            all_known = {}
+            for search_dir, origin in search_dirs:
+                if not os.path.isdir(search_dir):
+                    continue
+                for f in os.listdir(search_dir):
+                    if (os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
+                            and not os.path.splitext(f)[0].lower().startswith("preview")
+                            and f not in all_known):
+                        all_known[f] = (os.path.join(search_dir, f), origin)
 
-            if not image_files:
-                raise ValueError(f"[Curator] Keine Bilddateien in: {folder}")
+            if not all_known:
+                raise ValueError(f"[Curator] Keine Bilddateien gefunden in: {folder}")
 
-            print(f"[Curator] {len(image_files)} Bilder gefunden.")
+            image_files = sorted(all_known.keys())
+            new_files   = [f for f, (_, o) in all_known.items() if o == "neu"]
+            print(f"[Curator] {len(image_files)} Bilder gesamt "
+                  f"({len(new_files)} neu, "
+                  f"{len(image_files)-len(new_files)} bereits verarbeitet).")
 
             # Prompt aufbauen
             prompt = CURATOR_ANALYSIS_PROMPT
@@ -1137,15 +1155,16 @@ if HAS_VLM:
             ]
 
             for i, fname in enumerate(image_files, 1):
-                img_path = os.path.join(folder, fname)
-                base     = os.path.splitext(fname)[0]
+                img_path, origin = all_known[fname]
+                base      = os.path.splitext(fname)[0]
                 json_path = os.path.join(analysis_dir, base + ".json")
 
-                # Vorhandene Analyse verwenden wenn vorhanden
+                # Gecachte Analyse laden (immer wenn vorhanden und kein overwrite)
                 if os.path.exists(json_path) and not overwrite_analysis:
                     with open(json_path) as f:
                         analysis = _json.load(f)
-                    print(f"[Curator] [{i}/{len(image_files)}] {fname} (gecacht)")
+                    print(f"[Curator] [{i}/{len(image_files)}] {fname} "
+                          f"(gecacht, war in: {origin})")
                 else:
                     print(f"[Curator] [{i}/{len(image_files)}] Analysiere: {fname}")
 
@@ -1356,17 +1375,23 @@ if HAS_VLM:
 
                 if is_approved:
                     approved_list.append(analysis)
-                    if move_files and os.path.exists(img_path):
-                        shutil.move(img_path, os.path.join(approved_dir, fname))
+                    if move_files:
+                        dst = os.path.join(approved_dir, fname)
+                        if os.path.exists(img_path) and img_path != dst:
+                            shutil.move(img_path, dst)
                 elif is_policy:
                     needs_review_list.append(analysis)
-                    if move_files and os.path.exists(img_path):
-                        shutil.move(img_path, os.path.join(needs_review_dir, fname))
+                    if move_files:
+                        dst = os.path.join(needs_review_dir, fname)
+                        if os.path.exists(img_path) and img_path != dst:
+                            shutil.move(img_path, dst)
                     print(f"[Curator] → needs_review/: {fname}")
                 else:
                     rejected_list.append(analysis)
-                    if move_files and os.path.exists(img_path):
-                        shutil.move(img_path, os.path.join(rejected_dir, fname))
+                    if move_files:
+                        dst = os.path.join(rejected_dir, fname)
+                        if os.path.exists(img_path) and img_path != dst:
+                            shutil.move(img_path, dst)
 
             # ── Dataset-Slot-Analyse ────────────────────────────────────────
             slot_report = []
@@ -1545,6 +1570,13 @@ if HAS_VLM:
 
                 if move_files:
                     import shutil as _shutil
+                    # Erst selected/ leeren damit keine alten Bilder übrig bleiben
+                    for old_file in os.listdir(selected_dir):
+                        old_path = os.path.join(selected_dir, old_file)
+                        if os.path.isfile(old_path):
+                            os.remove(old_path)
+                    print(f"[Curator] selected/ geleert.")
+                    # Neu befüllen
                     for a in selected_list:
                         src = os.path.join(approved_dir, a["filename"])
                         dst = os.path.join(selected_dir, a["filename"])
