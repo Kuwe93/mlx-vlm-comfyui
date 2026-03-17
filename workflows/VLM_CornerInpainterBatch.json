@@ -1,0 +1,142 @@
+{
+  "last_node_id": 3,
+  "last_link_id": 1,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Note",
+      "pos": [
+        20,
+        20
+      ],
+      "size": [
+        520,
+        130
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "title": "Anleitung",
+      "widgets_values": [
+        "Corner Inpainter Batch\n\n1. image_folder auf den Ordner mit Trainingsbildern setzen\n2. Optionales VLM verbinden fuer automatische Ecken-Erkennung\n3. Ohne VLM: fallback_corners wird fuer alle Bilder verwendet\n4. Ergebnisse landen in inpainted/ im selben Ordner\n5. overwrite=False uebersprigt bereits verarbeitete Bilder"
+      ],
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "color": "#332233",
+      "bgcolor": "#332233"
+    },
+    {
+      "id": 2,
+      "type": "MfluxVLMLoader",
+      "pos": [
+        20,
+        170
+      ],
+      "size": [
+        360,
+        100
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "title": "VLM Loader (optional)",
+      "widgets_values": [
+        "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+        ""
+      ],
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "vlm_model",
+          "type": "MLXVLM_MODEL",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MfluxVLMLoader"
+      }
+    },
+    {
+      "id": 3,
+      "type": "VLMCornerInpainterBatch",
+      "pos": [
+        420,
+        170
+      ],
+      "size": [
+        400,
+        420
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "title": "Corner Inpainter Batch",
+      "widgets_values": [
+        "/path/to/images",
+        15.0,
+        "all_4",
+        8,
+        "clean background, no text, no logo",
+        20,
+        30.0,
+        "4",
+        false
+      ],
+      "inputs": [
+        {
+          "name": "vlm_model",
+          "type": "MLXVLM_MODEL",
+          "link": 1,
+          "slot_index": 0
+        },
+        {
+          "name": "Local_model",
+          "type": "PATH",
+          "link": null,
+          "slot_index": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "report",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 0
+        },
+        {
+          "name": "processed",
+          "type": "INT",
+          "links": [],
+          "slot_index": 1
+        },
+        {
+          "name": "skipped",
+          "type": "INT",
+          "links": [],
+          "slot_index": 2
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VLMCornerInpainterBatch"
+      }
+    }
+  ],
+  "links": [
+    [
+      1,
+      2,
+      0,
+      3,
+      0,
+      "MLXVLM_MODEL"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

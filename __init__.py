@@ -11,6 +11,7 @@ try:
         VLMCornerInpainter,
         VLMCuratorReview,
         VLMModelUnloader,
+        VLMCornerInpainterBatch,
     )
 except ImportError:
     HAS_VLM = False
@@ -31,7 +32,8 @@ if HAS_VLM:
         "VLMDatasetCurator":            VLMDatasetCurator,
         "VLMCornerInpainter":   VLMCornerInpainter,
         "VLMCuratorReview":     VLMCuratorReview,
-        "VLMModelUnloader":     VLMModelUnloader,
+        "VLMModelUnloader":          VLMModelUnloader,
+        "VLMCornerInpainterBatch":   VLMCornerInpainterBatch,
     }
     NODE_DISPLAY_NAME_MAPPINGS = {
         "MfluxVLMLoader":    "MLX VLM Loader",
@@ -43,5 +45,6 @@ if HAS_VLM:
         "VLMDatasetCurator":            "VLM Dataset Curator",
         "VLMCornerInpainter":   "VLM Corner Inpainter",
         "VLMCuratorReview":     "VLM Curator Review (Second Pass)",
-        "VLMModelUnloader":     "VLM Model Unloader",
+        "VLMModelUnloader":          "VLM Model Unloader",
+        "VLMCornerInpainterBatch":   "VLM Corner Inpainter Batch",
     }

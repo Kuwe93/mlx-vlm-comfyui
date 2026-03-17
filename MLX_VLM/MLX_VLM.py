@@ -2049,3 +2049,246 @@ if HAS_VLM:
                 msg = f"[VLMModelUnloader] Fehler beim Entladen: {e}"
                 print(msg)
                 return (msg,)
+
+
+# ---------------------------------------------------------------------------
+# Node: VLMCornerInpainterBatch
+# Verarbeitet alle Bilder eines Ordners:
+# - VLM erkennt optional welche Ecke das Overlay hat
+# - Maske wird erstellt
+# - mflux Fill entfernt das Overlay
+# - Ergebnis wird in inpainted/ gespeichert
+# ---------------------------------------------------------------------------
+if HAS_VLM:
+    class VLMCornerInpainterBatch:
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "image_folder": ("STRING", {
+                        "default": "/path/to/images",
+                        "tooltip": "Ordner mit Bildern. Ergebnisse werden in inpainted/ gespeichert.",
+                    }),
+                    "corner_size_percent": ("FLOAT", {
+                        "default": 15.0, "min": 1.0, "max": 40.0, "step": 0.5,
+                        "tooltip": "Groesse der Eckmaske in Prozent der Bildgroesse.",
+                    }),
+                    "fallback_corners": (["all_4", "top_left", "top_right",
+                                          "bottom_left", "bottom_right",
+                                          "top_both", "bottom_both"], {
+                        "default": "all_4",
+                        "tooltip": "Wird verwendet wenn kein VLM verbunden ist "
+                                   "oder das VLM kein Overlay erkennt.",
+                    }),
+                    "feather": ("INT", {
+                        "default": 8, "min": 0, "max": 50,
+                        "tooltip": "Weiche Kante der Maske in Pixeln.",
+                    }),
+                    "inpaint_prompt": ("STRING", {
+                        "default": "clean background, no text, no logo",
+                        "tooltip": "Prompt fuer das Fill-Inpainting.",
+                    }),
+                    "inpaint_steps": ("INT", {
+                        "default": 20, "min": 1, "max": 100,
+                    }),
+                    "inpaint_guidance": ("FLOAT", {
+                        "default": 30.0, "min": 1.0, "max": 100.0, "step": 0.5,
+                    }),
+                    "quantize": (["4", "8", "None"], {"default": "4"}),
+                    "overwrite": ("BOOLEAN", {
+                        "default": False,
+                        "label_on": "True", "label_off": "False",
+                        "tooltip": "Bereits verarbeitete Bilder (in inpainted/) erneut verarbeiten.",
+                    }),
+                },
+                "optional": {
+                    "vlm_model": ("MLXVLM_MODEL", {
+                        "tooltip": "Optional: VLM erkennt automatisch welche Ecke das Overlay hat.",
+                    }),
+                    "Local_model": ("PATH",
+                                    {"tooltip": "Lokales mflux Modell fuer Fill-Inpainting."}),
+                },
+            }
+
+        RETURN_TYPES = ("STRING", "INT", "INT")
+        RETURN_NAMES = ("report",  "processed", "skipped")
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "run_batch"
+        OUTPUT_NODE  = True
+
+        def run_batch(self, image_folder, corner_size_percent, fallback_corners,
+                      feather, inpaint_prompt, inpaint_steps, inpaint_guidance,
+                      quantize, overwrite, vlm_model=None, Local_model=""):
+            import json as _json
+            import shutil
+
+            folder = os.path.expanduser(image_folder.strip())
+            if not os.path.isdir(folder):
+                raise ValueError(f"[CornerBatch] Ordner nicht gefunden: {folder}")
+
+            output_dir = os.path.join(folder, "inpainted")
+            os.makedirs(output_dir, exist_ok=True)
+
+            image_files = sorted([
+                f for f in os.listdir(folder)
+                if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
+                and not os.path.splitext(f)[0].lower().startswith("preview")
+            ])
+
+            if not image_files:
+                raise ValueError(f"[CornerBatch] Keine Bilder in: {folder}")
+
+            print(f"[CornerBatch] {len(image_files)} Bilder gefunden.")
+
+            # mflux Fill imports
+            try:
+                from mflux.models.flux.variants.fill.flux_fill import Flux1Fill
+                from mflux.models.common.config.model_config import ModelConfig
+            except ImportError:
+                raise RuntimeError(
+                    "[CornerBatch] mflux Fill nicht verfuegbar. "
+                    "Stelle sicher dass mflux installiert ist."
+                )
+
+            q = None if quantize == "None" else int(quantize)
+            path = Local_model.strip() if Local_model and Local_model.strip() else None
+
+            # Fill-Modell laden (einmal für alle Bilder)
+            print("[CornerBatch] Lade Fill-Modell ...")
+            fill_inst = Flux1Fill(quantize=q, model_path=path)
+            print("[CornerBatch] Fill-Modell bereit.")
+
+            # VLM-Modell vorbereiten
+            vlm_model_obj = None
+            if vlm_model is not None:
+                vlm_model_obj, vlm_proc, vlm_cfg = vlm_model.get()
+
+            processed = 0
+            skipped   = 0
+            results   = []
+
+            base_corners_map = {
+                "top_left":     [(0, None, 0, None)],       # Platzhalter, wird unten berechnet
+                "top_right":    [(0, None, None, None)],
+                "bottom_left":  [(None, None, 0, None)],
+                "bottom_right": [(None, None, None, None)],
+            }
+
+            for i, fname in enumerate(image_files, 1):
+                img_path = os.path.join(folder, fname)
+                out_path = os.path.join(output_dir, fname)
+
+                # Überspringen wenn bereits vorhanden
+                if os.path.exists(out_path) and not overwrite:
+                    print(f"[CornerBatch] [{i}/{len(image_files)}] Ueberspringe: {fname}")
+                    skipped += 1
+                    continue
+
+                print(f"[CornerBatch] [{i}/{len(image_files)}] Verarbeite: {fname}")
+
+                try:
+                    # Bild laden
+                    pil_img = _PILImage.open(img_path).convert("RGB")
+                    w, h    = pil_img.size
+
+                    # Ecke bestimmen
+                    detected = fallback_corners
+                    if vlm_model_obj is not None:
+                        try:
+                            fp  = apply_chat_template(vlm_proc, vlm_cfg,
+                                                      CORNER_DETECT_PROMPT, num_images=1)
+                            out = generate(vlm_model_obj, vlm_proc, fp, [img_path],
+                                           max_tokens=80, temperature=0.0, verbose=False)
+                            raw = _extract_text(out).strip()
+                            if "```" in raw:
+                                raw = raw.split("```")[1]
+                                if raw.startswith("json"):
+                                    raw = raw[4:]
+                            result  = _json.loads(raw.strip())
+                            has_ov  = result.get("has_corner overlay", False)
+                            corner  = result.get("corner", "none")
+                            if has_ov and corner in CORNER_REMAP and corner != "none":
+                                detected = CORNER_REMAP[corner]
+                                print(f"[CornerBatch]   VLM: {detected}")
+                        except Exception as ve:
+                            print(f"[CornerBatch]   VLM-Fehler: {ve} → Fallback: {fallback_corners}")
+
+                    # Maske erstellen
+                    corner_h = int(h * corner_size_percent / 100)
+                    corner_w = int(w * corner_size_percent / 100)
+
+                    mask_np = np.zeros((h, w), dtype=np.float32)
+                    base_c  = {
+                        "top_left":     (0,          corner_h, 0,          corner_w),
+                        "top_right":    (0,          corner_h, w-corner_w, w),
+                        "bottom_left":  (h-corner_h, h,        0,          corner_w),
+                        "bottom_right": (h-corner_h, h,        w-corner_w, w),
+                    }
+                    region_map = {
+                        "top_left":     [base_c["top_left"]],
+                        "top_right":    [base_c["top_right"]],
+                        "bottom_left":  [base_c["bottom_left"]],
+                        "bottom_right": [base_c["bottom_right"]],
+                        "all_4":        list(base_c.values()),
+                        "top_both":     [base_c["top_left"],    base_c["top_right"]],
+                        "bottom_both":  [base_c["bottom_left"], base_c["bottom_right"]],
+                    }
+                    for (y1, y2, x1, x2) in region_map.get(detected, list(base_c.values())):
+                        mask_np[y1:y2, x1:x2] = 1.0
+
+                    if feather > 0:
+                        import cv2
+                        ks = feather * 2 + 1
+                        mask_np = cv2.GaussianBlur(mask_np, (ks, ks), feather / 3)
+                        mask_np = np.clip(mask_np, 0.0, 1.0)
+
+                    # PIL → temp files für mflux
+                    import tempfile
+                    tmp_img  = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                    tmp_mask = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                    pil_img.save(tmp_img.name)
+
+                    # Maske als PIL speichern (weiß = inpainten)
+                    mask_pil = _PILImage.fromarray((mask_np * 255).astype(np.uint8), mode="L")
+                    mask_pil.save(tmp_mask.name)
+
+                    # Fill-Inpainting
+                    import random
+                    seed = random.randint(0, 0xFFFFFFFF)
+                    generated = fill_inst.generate_image(
+                        prompt=inpaint_prompt,
+                        seed=seed,
+                        num_inference_steps=inpaint_steps,
+                        width=w,
+                        height=h,
+                        guidance=inpaint_guidance,
+                        image_path=tmp_img.name,
+                        mask_path=tmp_mask.name,
+                    )
+
+                    # Ergebnis speichern
+                    generated.save(out_path)
+                    print(f"[CornerBatch]   → inpainted/{fname} ({detected})")
+                    results.append(f"{fname}: {detected}")
+                    processed += 1
+
+                    # Temp-Dateien aufräumen
+                    for tmp in [tmp_img.name, tmp_mask.name]:
+                        try:
+                            os.unlink(tmp)
+                        except Exception:
+                            pass
+
+                except Exception as e:
+                    print(f"[CornerBatch]   FEHLER bei {fname}: {e}")
+                    results.append(f"{fname}: FEHLER - {str(e)[:60]}")
+
+            report = (
+                f"Corner Inpainting Batch\n"
+                f"Ordner: {folder}\n"
+                f"Verarbeitet: {processed} | Uebersprungen: {skipped}\n\n"
+                + "\n".join(results[:30])
+                + ("\n..." if len(results) > 30 else "")
+            )
+            print(f"\n[CornerBatch] Fertig: {processed} verarbeitet, {skipped} uebersprungen.")
+            return (report, processed, skipped)
