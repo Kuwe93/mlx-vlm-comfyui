@@ -77,14 +77,15 @@
       "title": "Corner Inpainter Batch",
       "widgets_values": [
         "/path/to/images",
+        "opencv",
         15.0,
         "all_4",
         8,
+        false,
         "clean background, no text, no logo",
         20,
         30.0,
-        "4",
-        false
+        "4"
       ],
       "inputs": [
         {
