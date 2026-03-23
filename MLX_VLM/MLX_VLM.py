@@ -168,7 +168,7 @@ PROMPT_GEN_MAP = {
         "camera angle and framing (close-up/upper body/full body), "
         "lighting quality and direction, background description, overall mood. "
         "Do NOT use quality tags like masterpiece or best quality. "
-        "Do NOT include negative descriptions. Maximum 80 words."
+        "Do NOT include negative descriptions. Maximum 150 words."
     ),
 
     "Z-Image · Two Persons": (
@@ -178,7 +178,7 @@ PROMPT_GEN_MAP = {
         "Include: gender and age of each person, hair and clothing details, "
         "pose and body language, camera angle, lighting, background. "
         "Start with 'two persons' or describe their relationship if clear. "
-        "Do NOT use quality tags. Maximum 100 words."
+        "Do NOT use quality tags. Maximum 150 words."
     ),
 
     "Z-Image · Group / Multiple Persons": (
@@ -187,7 +187,7 @@ PROMPT_GEN_MAP = {
         "Describe the group composition, number of persons, their arrangement and interaction. "
         "Include general appearance details, setting, lighting, mood and atmosphere. "
         "Do NOT list every person individually - describe the group as a whole. "
-        "Do NOT use quality tags. Maximum 100 words."
+        "Do NOT use quality tags. Maximum 150 words."
     ),
 
     "Z-Image · Landscape / Nature": (
@@ -197,7 +197,7 @@ PROMPT_GEN_MAP = {
         "dominant colors, vegetation or terrain features, "
         "lighting quality (golden hour, overcast, harsh sun etc.), "
         "depth and perspective, mood and atmosphere. "
-        "Do NOT use quality tags. Maximum 80 words."
+        "Do NOT use quality tags. Maximum 150 words."
     ),
 
     "Z-Image · Architecture / Interior": (
@@ -207,7 +207,7 @@ PROMPT_GEN_MAP = {
         "dominant materials and colors, lighting sources and quality, "
         "key structural or decorative elements, perspective and camera angle, "
         "time of day if exterior, overall atmosphere. "
-        "Do NOT use quality tags. Maximum 80 words."
+        "Do NOT use quality tags. Maximum 150 words."
     ),
 
     "Z-Image · Object / Product": (
@@ -216,7 +216,7 @@ PROMPT_GEN_MAP = {
         "Include: object name and category, shape and size impression, "
         "materials and surface texture, colors, "
         "lighting setup, background, camera angle and distance. "
-        "Do NOT use quality tags. Maximum 60 words."
+        "Do NOT use quality tags. Maximum 100 words."
     ),
 
     "Z-Image · Abstract / Artistic": (
@@ -225,7 +225,7 @@ PROMPT_GEN_MAP = {
         "Include: dominant shapes and forms, color palette, "
         "style references if recognizable, texture and composition, "
         "emotional tone and mood, technique impression. "
-        "Do NOT use quality tags. Maximum 60 words."
+        "Do NOT use quality tags. Maximum 100 words."
     ),
 
     # ── Stable Diffusion ────────────────────────────────────────────────────
@@ -237,7 +237,7 @@ PROMPT_GEN_MAP = {
         "lighting style (studio lighting/natural light/etc.), "
         "background, art style if applicable, "
         "technical quality tags (photorealistic, sharp focus, high detail). "
-        "Maximum 60 words."
+        "Maximum 100 words."
     ),
 
     "SD · Two Persons": (
@@ -246,7 +246,7 @@ PROMPT_GEN_MAP = {
         "Describe both subjects, their appearance and interaction. "
         "Include pose, setting, lighting, style tags. "
         "Add quality tags: photorealistic, sharp focus, high detail. "
-        "Maximum 70 words."
+        "Maximum 100 words."
     ),
 
     "SD · Landscape / Nature": (
@@ -254,14 +254,14 @@ PROMPT_GEN_MAP = {
         "Use comma-separated keywords. "
         "Include: scene type, time of day, weather, colors, atmosphere. "
         "Add style and quality tags: photorealistic, cinematic lighting, "
-        "sharp focus, highly detailed. Maximum 50 words."
+        "sharp focus, highly detailed. Maximum 80 words."
     ),
 
     "SD · Object / Product": (
         "Describe this object as a Stable Diffusion generation prompt. "
         "Use comma-separated keywords. "
         "Include object, material, lighting, background. "
-        "Add: product photography, studio lighting, sharp focus. Maximum 40 words."
+        "Add: product photography, studio lighting, sharp focus. Maximum 100 words."
     ),
 
     # ── Universell ──────────────────────────────────────────────────────────
@@ -269,7 +269,7 @@ PROMPT_GEN_MAP = {
         "Describe this image in comprehensive detail. "
         "Include all visible elements: subjects, objects, colors, textures, "
         "lighting, composition, background, mood and atmosphere. "
-        "Write as a single coherent paragraph. Maximum 120 words."
+        "Write as a single coherent paragraph. Maximum 200 words."
     ),
 
     "Universal · Short Prompt": (
@@ -391,7 +391,9 @@ class MfluxVLMRun:
                                "Aktiv wenn preset=Custom und text_input leer. "
                                "Waehle passend zu Motiv und Zielmodell.",
                 }),
-                "max_tokens":  ("INT",   {"default": 300, "min": 50,  "max": 2000, "step": 50}),
+                "max_tokens":  ("INT",   {"default": 500, "min": 50,  "max": 2000, "step": 50,
+                                          "tooltip": "Maximale Tokens der Antwort. "
+                                                     "Fuer ausfuehrliche Prompt-Generierung 400-600 empfohlen."}),
                 "temperature": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0,  "step": 0.05,
                                           "tooltip": "0.0 = deterministisch. Fuer Florence2 irrelevant."}),
             },
@@ -404,6 +406,18 @@ class MfluxVLMRun:
                         "Andere VLMs: Ueberschreibt alle Presets komplett wenn gesetzt."
                     ),
                 }),
+                "prompt_prefix": ("STRING", {
+                    "default": "",
+                    "tooltip": "Wird VOR den generierten Prompt gesetzt. "
+                               "Z.B. Trigger-Token: 'ohwx person, ' "
+                               "Ergebnis: 'ohwx person, [generierter Prompt]'",
+                }),
+                "prompt_suffix": ("STRING", {
+                    "default": "",
+                    "tooltip": "Wird NACH den generierten Prompt angehaengt. "
+                               "Z.B. zusaetzliche Tags: ', cinematic lighting, 8k' "
+                               "oder negative Einschraenkungen.",
+                }),
             },
         }
 
@@ -413,7 +427,8 @@ class MfluxVLMRun:
     FUNCTION = "run"
 
     def run(self, vlm_model, image, task, preset, prompt_gen_preset,
-            max_tokens, temperature, text_input=""):
+            max_tokens, temperature, text_input="",
+            prompt_prefix="", prompt_suffix=""):
         if not HAS_VLM:
             raise RuntimeError("mlx-vlm is not installed. Run: pip install mlx-vlm")
 
@@ -456,7 +471,19 @@ class MfluxVLMRun:
                 verbose=False,
             )
 
-            result = _extract_text(output)
+            result = _extract_text(output).strip()
+            # Prefix und Suffix anhängen
+            if prompt_prefix and prompt_prefix.strip():
+                prefix = prompt_prefix.strip()
+                if not prefix.endswith(" ") and not result.startswith(","):
+                    prefix = prefix + " "
+                result = prefix + result
+            if prompt_suffix and prompt_suffix.strip():
+                suffix = prompt_suffix.strip()
+                if not result.endswith(",") and not suffix.startswith(","):
+                    result = result + ", " + suffix
+                else:
+                    result = result + " " + suffix
             print(f"[MfluxVLM] Result: {result[:120]}{'...' if len(result) > 120 else ''}")
             return (result,)
 
