@@ -107,6 +107,9 @@ FLORENCE2_TASKS_WITH_TEXT = {
 # ---------------------------------------------------------------------------
 # Allgemeine Prompt-Presets für alle anderen VLMs
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Allgemeine Presets (Captioning, OCR etc.)
+# ---------------------------------------------------------------------------
 GENERAL_PRESETS = [
     "Detailed Caption (for img2img)",
     "Stable Diffusion Style Prompt",
@@ -127,6 +130,154 @@ GENERAL_PRESET_MAP = {
     "Object Detection":   "List all objects and their positions visible in this image.",
     "OCR - Read Text":    "Read and transcribe all text visible in this image.",
     "Custom":             "",
+}
+
+# ---------------------------------------------------------------------------
+# Prompt-Generator Presets für Bildgenerierungsmodelle
+# Aufgeteilt nach Modell-Familie und Motiv
+# ---------------------------------------------------------------------------
+PROMPT_GEN_PRESETS = [
+    # ── Z-Image / FLUX ──────────────────────────────────────────────────────
+    "Z-Image · Single Person Portrait",
+    "Z-Image · Two Persons",
+    "Z-Image · Group / Multiple Persons",
+    "Z-Image · Landscape / Nature",
+    "Z-Image · Architecture / Interior",
+    "Z-Image · Object / Product",
+    "Z-Image · Abstract / Artistic",
+    # ── Stable Diffusion ────────────────────────────────────────────────────
+    "SD · Single Person Portrait",
+    "SD · Two Persons",
+    "SD · Landscape / Nature",
+    "SD · Object / Product",
+    # ── Universell ──────────────────────────────────────────────────────────
+    "Universal · Detailed Description",
+    "Universal · Short Prompt",
+    "Custom",
+]
+
+PROMPT_GEN_MAP = {
+
+    # ── Z-Image / FLUX ──────────────────────────────────────────────────────
+    "Z-Image · Single Person Portrait": (
+        "Describe this portrait image as a generation prompt for a photorealistic AI image model. "
+        "Write a single descriptive paragraph, comma-separated phrases. "
+        "Include in this order: subject gender and approximate age, hair color and style, "
+        "eye color if visible, skin tone, facial expression, "
+        "clothing with colors and material details, pose and body position, "
+        "camera angle and framing (close-up/upper body/full body), "
+        "lighting quality and direction, background description, overall mood. "
+        "Do NOT use quality tags like masterpiece or best quality. "
+        "Do NOT include negative descriptions. Maximum 80 words."
+    ),
+
+    "Z-Image · Two Persons": (
+        "Describe this image as a generation prompt for a photorealistic AI image model. "
+        "Write a single descriptive paragraph, comma-separated phrases. "
+        "Describe both persons: their appearance, clothing, relative positions and interaction. "
+        "Include: gender and age of each person, hair and clothing details, "
+        "pose and body language, camera angle, lighting, background. "
+        "Start with 'two persons' or describe their relationship if clear. "
+        "Do NOT use quality tags. Maximum 100 words."
+    ),
+
+    "Z-Image · Group / Multiple Persons": (
+        "Describe this image as a generation prompt for a photorealistic AI image model. "
+        "Write a single descriptive paragraph, comma-separated phrases. "
+        "Describe the group composition, number of persons, their arrangement and interaction. "
+        "Include general appearance details, setting, lighting, mood and atmosphere. "
+        "Do NOT list every person individually - describe the group as a whole. "
+        "Do NOT use quality tags. Maximum 100 words."
+    ),
+
+    "Z-Image · Landscape / Nature": (
+        "Describe this landscape or nature image as a generation prompt for a photorealistic AI image model. "
+        "Write a single descriptive paragraph, comma-separated phrases. "
+        "Include: location type, time of day, weather and sky conditions, "
+        "dominant colors, vegetation or terrain features, "
+        "lighting quality (golden hour, overcast, harsh sun etc.), "
+        "depth and perspective, mood and atmosphere. "
+        "Do NOT use quality tags. Maximum 80 words."
+    ),
+
+    "Z-Image · Architecture / Interior": (
+        "Describe this architectural or interior image as a generation prompt for a photorealistic AI image model. "
+        "Write a single descriptive paragraph, comma-separated phrases. "
+        "Include: building type or room type, architectural style, "
+        "dominant materials and colors, lighting sources and quality, "
+        "key structural or decorative elements, perspective and camera angle, "
+        "time of day if exterior, overall atmosphere. "
+        "Do NOT use quality tags. Maximum 80 words."
+    ),
+
+    "Z-Image · Object / Product": (
+        "Describe this product or object image as a generation prompt for a photorealistic AI image model. "
+        "Write a single descriptive paragraph, comma-separated phrases. "
+        "Include: object name and category, shape and size impression, "
+        "materials and surface texture, colors, "
+        "lighting setup, background, camera angle and distance. "
+        "Do NOT use quality tags. Maximum 60 words."
+    ),
+
+    "Z-Image · Abstract / Artistic": (
+        "Describe this artistic or abstract image as a generation prompt for an AI image model. "
+        "Write a single descriptive paragraph, comma-separated phrases. "
+        "Include: dominant shapes and forms, color palette, "
+        "style references if recognizable, texture and composition, "
+        "emotional tone and mood, technique impression. "
+        "Do NOT use quality tags. Maximum 60 words."
+    ),
+
+    # ── Stable Diffusion ────────────────────────────────────────────────────
+    "SD · Single Person Portrait": (
+        "Describe this portrait as a Stable Diffusion generation prompt. "
+        "Use comma-separated keywords and short phrases. "
+        "Include: subject description (gender, age, hair, eyes, expression), "
+        "clothing details, pose, camera angle, "
+        "lighting style (studio lighting/natural light/etc.), "
+        "background, art style if applicable, "
+        "technical quality tags (photorealistic, sharp focus, high detail). "
+        "Maximum 60 words."
+    ),
+
+    "SD · Two Persons": (
+        "Describe this image as a Stable Diffusion generation prompt. "
+        "Use comma-separated keywords and short phrases. "
+        "Describe both subjects, their appearance and interaction. "
+        "Include pose, setting, lighting, style tags. "
+        "Add quality tags: photorealistic, sharp focus, high detail. "
+        "Maximum 70 words."
+    ),
+
+    "SD · Landscape / Nature": (
+        "Describe this landscape as a Stable Diffusion generation prompt. "
+        "Use comma-separated keywords. "
+        "Include: scene type, time of day, weather, colors, atmosphere. "
+        "Add style and quality tags: photorealistic, cinematic lighting, "
+        "sharp focus, highly detailed. Maximum 50 words."
+    ),
+
+    "SD · Object / Product": (
+        "Describe this object as a Stable Diffusion generation prompt. "
+        "Use comma-separated keywords. "
+        "Include object, material, lighting, background. "
+        "Add: product photography, studio lighting, sharp focus. Maximum 40 words."
+    ),
+
+    # ── Universell ──────────────────────────────────────────────────────────
+    "Universal · Detailed Description": (
+        "Describe this image in comprehensive detail. "
+        "Include all visible elements: subjects, objects, colors, textures, "
+        "lighting, composition, background, mood and atmosphere. "
+        "Write as a single coherent paragraph. Maximum 120 words."
+    ),
+
+    "Universal · Short Prompt": (
+        "Describe this image in one short sentence of maximum 20 words. "
+        "Focus on the most important subject and action only."
+    ),
+
+    "Custom": "",
 }
 
 
@@ -232,7 +383,13 @@ class MfluxVLMRun:
                 }),
                 "preset": (GENERAL_PRESETS, {
                     "default": "Detailed Caption (for img2img)",
-                    "tooltip": "Prompt-Preset fuer Qwen2-VL, PaliGemma, SmolVLM usw. Wird ignoriert wenn Florence2 geladen ist.",
+                    "tooltip": "Allgemeine Presets: Captioning, OCR etc. Wird ignoriert wenn Florence2 geladen ist.",
+                }),
+                "prompt_gen_preset": (PROMPT_GEN_PRESETS, {
+                    "default": "Z-Image · Single Person Portrait",
+                    "tooltip": "Prompt-Generator Presets fuer Bildgenerierungsmodelle (Z-Image, SD etc.). "
+                               "Aktiv wenn preset=Custom und text_input leer. "
+                               "Waehle passend zu Motiv und Zielmodell.",
                 }),
                 "max_tokens":  ("INT",   {"default": 300, "min": 50,  "max": 2000, "step": 50}),
                 "temperature": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0,  "step": 0.05,
@@ -243,8 +400,8 @@ class MfluxVLMRun:
                     "multiline": True,
                     "default": "",
                     "tooltip": (
-                        "Florence2: Nur fuer Tasks mit Texteingabe (caption_to_phrase_grounding etc.). "
-                        "Andere VLMs: Ueberschreibt das Preset komplett."
+                        "Florence2: Nur fuer Tasks mit Texteingabe. "
+                        "Andere VLMs: Ueberschreibt alle Presets komplett wenn gesetzt."
                     ),
                 }),
             },
@@ -255,8 +412,8 @@ class MfluxVLMRun:
     CATEGORY = "MFlux/VLM"
     FUNCTION = "run"
 
-    def run(self, vlm_model, image, task, preset, max_tokens, temperature,
-            text_input=""):
+    def run(self, vlm_model, image, task, preset, prompt_gen_preset,
+            max_tokens, temperature, text_input=""):
         if not HAS_VLM:
             raise RuntimeError("mlx-vlm is not installed. Run: pip install mlx-vlm")
 
@@ -273,13 +430,19 @@ class MfluxVLMRun:
                     prompt = task_token
             else:
                 if text_input and text_input.strip():
+                    # Eigener Text hat höchste Priorität
                     prompt = text_input.strip()
-                else:
+                elif preset != "Custom":
+                    # Allgemeines Preset gewählt
                     prompt = GENERAL_PRESET_MAP.get(preset, "Describe this image in detail.")
-                    if not prompt:
-                        prompt = "Describe this image in detail."
+                else:
+                    # Custom preset → Prompt-Gen Preset verwenden
+                    prompt = PROMPT_GEN_MAP.get(prompt_gen_preset, "Describe this image in detail.")
+                if not prompt:
+                    prompt = "Describe this image in detail."
 
-            print(f"[MfluxVLM] Prompt: {prompt}")
+            print(f"[MfluxVLM] Preset: {preset} / {prompt_gen_preset}")
+            print(f"[MfluxVLM] Prompt: {prompt[:80]}...")
 
             formatted_prompt = apply_chat_template(
                 processor, config, prompt, num_images=1
