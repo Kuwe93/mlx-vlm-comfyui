@@ -286,6 +286,48 @@ def _is_florence2(model_path: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Node: VLMPromptBuilder
+# Gibt den Text eines Prompt-Gen Presets als STRING aus damit er
+# in einem primitiven String-Node angezeigt und editiert werden kann.
+# Workflow: VLMPromptBuilder → String-Node (editieren) → MfluxVLMRun text_input
+# ---------------------------------------------------------------------------
+class VLMPromptBuilder:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "preset": (PROMPT_GEN_PRESETS, {
+                    "default": "Z-Image · Single Person Portrait",
+                    "tooltip": "Preset auswählen. Der Prompt-Text wird als STRING ausgegeben "
+                               "und kann dann in einem String-Node editiert werden.",
+                }),
+            },
+            "optional": {
+                "extra_instruction": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": "Zusaetzliche Anweisung die ans Ende des Preset-Textes angehaengt wird. "
+                               "Z.B. 'Ignore the background completely.' oder "
+                               "'Focus only on the face, do not describe clothing.'",
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("prompt_text",)
+    CATEGORY     = "MFlux/VLM"
+    FUNCTION     = "build"
+
+    def build(self, preset, extra_instruction=""):
+        base = PROMPT_GEN_MAP.get(preset, "Describe this image in detail.")
+        if extra_instruction and extra_instruction.strip():
+            base = base.rstrip() + " " + extra_instruction.strip()
+        print(f"[VLMPromptBuilder] Preset: {preset}")
+        print(f"[VLMPromptBuilder] Prompt: {base[:120]}...")
+        return (base,)
+
+
+# ---------------------------------------------------------------------------
 # Hilfsfunktionen
 # ---------------------------------------------------------------------------
 def _tensor_to_pil(tensor: torch.Tensor) -> Image.Image:
