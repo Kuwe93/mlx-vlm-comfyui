@@ -4,7 +4,7 @@ description = "ComfyUI nodes for Vision Language Models via mlx-vlm. Supports Fl
 version = "1.0.0"
 license = {file = "LICENSE"}
 dependencies = [
-    "mlx-vlm>=0.4.1",
+    "mlx-vlm>=0.4.2",
 ]
 
 [project.urls]
