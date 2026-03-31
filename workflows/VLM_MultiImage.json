@@ -75,7 +75,7 @@
       "properties": {"Node name for S&R": "MfluxVLMRunMulti"},
       "widgets_values": [
         "more_detailed_caption",
-        "Detailed Caption (for img2img)",
+        "Caption · Detailed",
         500, 0.0,
         "Compare these images and describe their similarities and differences."
       ]

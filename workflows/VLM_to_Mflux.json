@@ -115,7 +115,7 @@
       },
       "widgets_values": [
         "more_detailed_caption",
-        "Detailed Caption (for img2img)",
+        "Caption \u00b7 Detailed",
         300,
         0.0,
         ""
@@ -294,7 +294,7 @@
       "IMAGE"
     ],
     [
-      3,
+      5,
       3,
       0,
       6,

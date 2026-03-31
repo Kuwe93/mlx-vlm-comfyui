@@ -1,8 +1,13 @@
 import os
+import gc
+import sys
+import json as _json
+import subprocess
 import tempfile
 import numpy as np
 import torch
 from PIL import Image
+from PIL import Image as _PILImage
 
 # ---------------------------------------------------------------------------
 # mlx-vlm – defensiver Import
@@ -35,18 +40,40 @@ def _extract_text(output) -> str:
     return str(output).strip()
 
 
+def _extract_token_count(output) -> int:
+    """Extrahiert die Anzahl generierter Tokens aus dem generate()-Output (falls verfügbar)."""
+    for attr in ("usage", "generation_tokens", "output_tokens"):
+        if hasattr(output, attr):
+            val = getattr(output, attr)
+            if isinstance(val, int):
+                return val
+            if hasattr(val, "completion_tokens"):
+                return val.completion_tokens
+            if hasattr(val, "output_tokens"):
+                return val.output_tokens
+    return -1
+
+
 # ---------------------------------------------------------------------------
 # Bekannte mlx-community Modelle für das Dropdown
 # ---------------------------------------------------------------------------
 VLM_MODELS = [
-    "mlx-community/Qwen2-VL-2B-Instruct-4bit",
-    "mlx-community/Qwen2-VL-7B-Instruct-4bit",
+    # Qwen2.5-VL (empfohlen)
     "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
     "mlx-community/Qwen2.5-VL-7B-Instruct-4bit",
-    "mlx-community/SmolVLM-Instruct",
+    "mlx-community/Qwen2.5-VL-7B-Instruct-8bit",
+    # Qwen2-VL (ältere Generation)
+    "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+    "mlx-community/Qwen2-VL-7B-Instruct-4bit",
+    # SmolVLM2 (leichtgewichtig)
+    "mlx-community/SmolVLM2-500M-Instruct-mlx",
     "mlx-community/SmolVLM2-2.2B-Instruct-mlx",
+    "mlx-community/SmolVLM-Instruct",
+    # Florence-2
     "mlx-community/Florence-2-large-ft",
+    # PaliGemma
     "mlx-community/paligemma2-3b-mix-448-8bit",
+    # Moondream
     "vikhyatk/moondream2",
 ]
 
@@ -110,16 +137,63 @@ FLORENCE2_TASKS_WITH_TEXT = {
 # ---------------------------------------------------------------------------
 # Allgemeine Presets (Captioning, OCR etc.)
 # ---------------------------------------------------------------------------
-GENERAL_PRESETS = [
-    "Detailed Caption (for img2img)",
-    "Stable Diffusion Style Prompt",
-    "Short Caption",
-    "Object Detection",
-    "OCR - Read Text",
-    "Custom",
+# Kombiniertes Preset-Dropdown für MfluxVLMRun
+# (Florence2 nutzt weiterhin "task", alle anderen VLMs dieses Dropdown)
+VLM_PRESETS = [
+    # ── Prompt-Generator für Bildgenerierung ───────────────────────────────
+    "Z-Image · Single Person Portrait",
+    "Z-Image · Two Persons",
+    "Z-Image · Group / Multiple Persons",
+    "Z-Image · Landscape / Nature",
+    "Z-Image · Architecture / Interior",
+    "Z-Image · Object / Product",
+    "Z-Image · Abstract / Artistic",
+    "SD · Single Person Portrait",
+    "SD · Two Persons",
+    "SD · Landscape / Nature",
+    "SD · Object / Product",
+    # ── Allgemeines Captioning ──────────────────────────────────────────────
+    "Caption · Detailed",
+    "Caption · Short",
+    "Caption · Object Detection",
+    "Caption · OCR",
+    "Caption · Style Analysis",
+    "Caption · Mood & Atmosphere",
+    # ── Training / Dataset ──────────────────────────────────────────────────
+    "Training · Alt-Text (Accessibility)",
+    "Training · Tag List (Booru Style)",
+    # ── Eigener Prompt ──────────────────────────────────────────────────────
+    "Custom (nur text_input)",
 ]
 
+# Rückwärtskompatibilität für bestehende Nodes
+GENERAL_PRESETS = VLM_PRESETS
+
 GENERAL_PRESET_MAP = {
+    # Captioning
+    "Caption · Detailed":
+        "Describe this image in detail. Focus on the subject, style, lighting, colors, and composition. "
+        "Write it as a single descriptive paragraph.",
+    "Caption · Short":        "Describe this image in one sentence.",
+    "Caption · Object Detection": "List all objects and their positions visible in this image.",
+    "Caption · OCR":          "Read and transcribe all text visible in this image.",
+    "Caption · Style Analysis":
+        "Analyze the visual style of this image. Describe the artistic style, color palette, "
+        "composition technique, lighting approach, and overall aesthetic. "
+        "Is it photorealistic, painterly, graphic, cinematic? What mood does the style create?",
+    "Caption · Mood & Atmosphere":
+        "Describe the mood and atmosphere of this image in detail. "
+        "What emotions does it evoke? What contributes to the atmosphere – "
+        "lighting, colors, composition, subject matter? Write as a single paragraph.",
+    "Training · Alt-Text (Accessibility)":
+        "Write a concise, factual alt-text description for this image for accessibility purposes. "
+        "Describe the main subject and action in plain language. Maximum 30 words.",
+    "Training · Tag List (Booru Style)":
+        "Generate a comma-separated list of descriptive tags for this image in Danbooru/Booru style. "
+        "Include: subject tags, clothing tags, expression tags, background tags, quality tags, "
+        "composition tags. Order from most to least important. No explanations, tags only.",
+    "Custom (nur text_input)": "",
+    # Rückwärtskompatibilität
     "Detailed Caption (for img2img)":
         "Describe this image in detail. Focus on the subject, style, lighting, colors, and composition. "
         "Write it as a single descriptive paragraph suitable as a generation prompt.",
@@ -131,6 +205,8 @@ GENERAL_PRESET_MAP = {
     "OCR - Read Text":    "Read and transcribe all text visible in this image.",
     "Custom":             "",
 }
+
+# VLM_PRESET_MAP wird nach PROMPT_GEN_MAP definiert (weiter unten)
 
 # ---------------------------------------------------------------------------
 # Prompt-Generator Presets für Bildgenerierungsmodelle
@@ -281,6 +357,10 @@ PROMPT_GEN_MAP = {
 }
 
 
+# Kombinierte Map für VLM_PRESETS – MUSS nach PROMPT_GEN_MAP stehen
+VLM_PRESET_MAP = {**GENERAL_PRESET_MAP, **PROMPT_GEN_MAP}
+
+
 def _is_florence2(model_path: str) -> bool:
     return "florence" in model_path.lower()
 
@@ -360,6 +440,21 @@ def _load_vlm(model_path: str):
     return model, processor, config
 
 
+def _unload_vlm(model_path: str):
+    """Entlädt ein Modell vollständig aus Cache und MLX Metal Heap."""
+    if model_path in _vlm_cache:
+        del _vlm_cache[model_path]
+        print(f"[MfluxVLM] Cache geleert für: {model_path}")
+    gc.collect()
+    try:
+        import mlx.core as mx
+        mx.metal.clear_cache()
+        # Synchronisieren damit Metal den Heap wirklich freigibt
+        mx.eval([])
+    except Exception:
+        pass
+
+
 class MfluxVLMPipeline:
     def __init__(self, model_path: str):
         self.model_path = model_path
@@ -423,52 +518,43 @@ class MfluxVLMRun:
                     "default": "more_detailed_caption",
                     "tooltip": "Florence2 task. Nur aktiv wenn ein Florence2-Modell geladen ist.",
                 }),
-                "preset": (GENERAL_PRESETS, {
-                    "default": "Detailed Caption (for img2img)",
-                    "tooltip": "Allgemeine Presets: Captioning, OCR etc. Wird ignoriert wenn Florence2 geladen ist.",
-                }),
-                "prompt_gen_preset": (PROMPT_GEN_PRESETS, {
+                "preset": (VLM_PRESETS, {
                     "default": "Z-Image · Single Person Portrait",
-                    "tooltip": "Prompt-Generator Presets fuer Bildgenerierungsmodelle (Z-Image, SD etc.). "
-                               "Aktiv wenn preset=Custom und text_input leer. "
-                               "Waehle passend zu Motiv und Zielmodell.",
+                    "tooltip": "Aufgabe fuer das VLM. Waehle passend zu Motiv und Zielmodell. "
+                               "Florence2 ignoriert dieses Feld und nutzt 'task'.",
                 }),
                 "max_tokens":  ("INT",   {"default": 500, "min": 50,  "max": 2000, "step": 50,
-                                          "tooltip": "Maximale Tokens der Antwort. "
-                                                     "Fuer ausfuehrliche Prompt-Generierung 400-600 empfohlen."}),
+                                          "tooltip": "Maximale Tokens. 400-600 fuer ausfuehrliche Prompts."}),
                 "temperature": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0,  "step": 0.05,
-                                          "tooltip": "0.0 = deterministisch. Fuer Florence2 irrelevant."}),
+                                          "tooltip": "0.0 = deterministisch."}),
             },
             "optional": {
                 "text_input": ("STRING", {
                     "multiline": True,
                     "default": "",
-                    "tooltip": (
-                        "Florence2: Nur fuer Tasks mit Texteingabe. "
-                        "Andere VLMs: Ueberschreibt alle Presets komplett wenn gesetzt."
-                    ),
+                    "tooltip": "Zusaetzliche Anweisung die an den Preset-Prompt angehaengt wird. "
+                               "Z.B. 'Ignore the background.' oder 'Focus only on the face.' "
+                               "Bei 'Custom (nur text_input)' wird nur dieser Text verwendet.",
                 }),
                 "prompt_prefix": ("STRING", {
                     "default": "",
-                    "tooltip": "Wird VOR den generierten Prompt gesetzt. "
-                               "Z.B. Trigger-Token: 'ohwx person, ' "
-                               "Ergebnis: 'ohwx person, [generierter Prompt]'",
+                    "tooltip": "Wird dem VLM-Output vorangestellt. "
+                               "Z.B. Trigger-Token: 'ohwx person' → 'ohwx person, [Output]'",
                 }),
                 "prompt_suffix": ("STRING", {
                     "default": "",
-                    "tooltip": "Wird NACH den generierten Prompt angehaengt. "
-                               "Z.B. zusaetzliche Tags: ', cinematic lighting, 8k' "
-                               "oder negative Einschraenkungen.",
+                    "tooltip": "Wird dem VLM-Output angehaengt. "
+                               "Z.B. ', cinematic lighting, 8k'",
                 }),
             },
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("caption",)
+    RETURN_TYPES = ("STRING", "INT")
+    RETURN_NAMES = ("caption", "token_count")
     CATEGORY = "MFlux/VLM"
     FUNCTION = "run"
 
-    def run(self, vlm_model, image, task, preset, prompt_gen_preset,
+    def run(self, vlm_model, image, task, preset,
             max_tokens, temperature, text_input="",
             prompt_prefix="", prompt_suffix=""):
         if not HAS_VLM:
@@ -486,19 +572,17 @@ class MfluxVLMRun:
                 else:
                     prompt = task_token
             else:
-                if text_input and text_input.strip():
-                    # Eigener Text hat höchste Priorität
-                    prompt = text_input.strip()
-                elif preset != "Custom":
-                    # Allgemeines Preset gewählt
-                    prompt = GENERAL_PRESET_MAP.get(preset, "Describe this image in detail.")
+                # Preset-Prompt laden
+                base_prompt = VLM_PRESET_MAP.get(preset, "Describe this image in detail.")
+                if not base_prompt:
+                    # "Custom (nur text_input)" → nur text_input verwenden
+                    prompt = text_input.strip() if text_input and text_input.strip() else "Describe this image in detail."
+                elif text_input and text_input.strip():
+                    # Zusätzliche Anweisung an Preset anhängen
+                    prompt = base_prompt.rstrip() + " " + text_input.strip()
                 else:
-                    # Custom preset → Prompt-Gen Preset verwenden
-                    prompt = PROMPT_GEN_MAP.get(prompt_gen_preset, "Describe this image in detail.")
-                if not prompt:
-                    prompt = "Describe this image in detail."
-
-            print(f"[MfluxVLM] Preset: {preset} / {prompt_gen_preset}")
+                    prompt = base_prompt
+            print(f"[MfluxVLM] Preset: {preset}")
             print(f"[MfluxVLM] Prompt: {prompt[:80]}...")
 
             formatted_prompt = apply_chat_template(
@@ -514,11 +598,13 @@ class MfluxVLMRun:
             )
 
             result = _extract_text(output).strip()
+            token_count = _extract_token_count(output)
+
             # Prefix und Suffix anhängen
             if prompt_prefix and prompt_prefix.strip():
                 prefix = prompt_prefix.strip()
                 if not prefix.endswith(" ") and not result.startswith(","):
-                    prefix = prefix + " "
+                    prefix = prefix + ", "
                 result = prefix + result
             if prompt_suffix and prompt_suffix.strip():
                 suffix = prompt_suffix.strip()
@@ -526,8 +612,8 @@ class MfluxVLMRun:
                     result = result + ", " + suffix
                 else:
                     result = result + " " + suffix
-            print(f"[MfluxVLM] Result: {result[:120]}{'...' if len(result) > 120 else ''}")
-            return (result,)
+            print(f"[MfluxVLM] Result ({token_count} tokens): {result[:120]}{'...' if len(result) > 120 else ''}")
+            return (result, token_count)
 
         finally:
             try:
@@ -549,8 +635,8 @@ class MfluxVLMRunMulti:
                 "task": (FLORENCE2_TASKS, {
                     "default": "more_detailed_caption",
                 }),
-                "preset": (GENERAL_PRESETS, {
-                    "default": "Detailed Caption (for img2img)",
+                "preset": (VLM_PRESETS, {
+                    "default": "Caption · Detailed",   # Fix: war "Detailed Caption (for img2img)"
                 }),
                 "max_tokens":  ("INT",   {"default": 500, "min": 50,  "max": 2000, "step": 50}),
                 "temperature": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0,  "step": 0.05}),
@@ -562,8 +648,8 @@ class MfluxVLMRunMulti:
             },
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("caption",)
+    RETURN_TYPES = ("STRING", "INT")
+    RETURN_NAMES = ("caption", "token_count")
     CATEGORY = "MFlux/VLM"
     FUNCTION = "run"
 
@@ -587,7 +673,7 @@ class MfluxVLMRunMulti:
                 if text_input and text_input.strip():
                     prompt = text_input.strip()
                 else:
-                    prompt = GENERAL_PRESET_MAP.get(preset, "Describe these images in detail.")
+                    prompt = VLM_PRESET_MAP.get(preset, "Describe these images in detail.")
                     if not prompt:
                         prompt = "Describe these images in detail."
 
@@ -605,7 +691,8 @@ class MfluxVLMRunMulti:
                 verbose=False,
             )
 
-            return (_extract_text(output),)
+            token_count = _extract_token_count(output)
+            return (_extract_text(output), token_count)
 
         finally:
             for p in image_paths:
@@ -621,8 +708,6 @@ class MfluxVLMRunMulti:
 # analog zu MfluxCustomModels in mflux-comfyui-2
 # Ruft `python -m mlx_vlm.convert` als Subprozess auf
 # ---------------------------------------------------------------------------
-import sys
-import subprocess
 
 QUANTIZE_BITS = ["4", "8", "3", "6"]
 
@@ -844,7 +929,7 @@ if HAS_VLM:
                     "vlm_model":    ("MLXVLM_MODEL",),
                     "image_folder": ("STRING", {"default": "/path/to/images"}),
                     "task":    (FLORENCE2_TASKS,  {"default": "more_detailed_caption"}),
-                    "preset":  (GENERAL_PRESETS,  {"default": "Detailed Caption (for img2img)"}),
+                    "preset":  (GENERAL_PRESETS,  {"default": "Caption · Detailed"}),
                     "max_tokens":   ("INT",   {"default": 300, "min": 50, "max": 2000, "step": 50}),
                     "temperature":  ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05}),
                     "overwrite":    ("BOOLEAN", {"default": False, "label_on": "True", "label_off": "False"}),
@@ -1901,9 +1986,6 @@ if HAS_VLM:
 # Mit optionalem vlm_model erkennt das VLM automatisch welche Ecke.
 # Ohne vlm_model: manueller corners-Parameter oder Fallback all_4.
 # ---------------------------------------------------------------------------
-import torch
-import numpy as np
-from PIL import Image as _PILImage
 
 CORNER_DETECT_PROMPT = """Look at this image carefully. Is there a corner overlay, logo, or text overlay in any corner?
 Respond with ONLY a JSON object, no other text:
@@ -1970,12 +2052,14 @@ class VLMCornerInpainter:
 
         # ── VLM-Analyse wenn verbunden ──────────────────────────────────────
         if vlm_model is not None and HAS_VLM:
+            tmp_path = None
             try:
                 img_np  = (image[0].cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
                 img_pil = _PILImage.fromarray(img_np)
                 tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-                img_pil.save(tmp.name)
                 tmp_path = tmp.name
+                tmp.close()
+                img_pil.save(tmp_path)
 
                 model, processor, config = vlm_model.get()
                 fp  = apply_chat_template(processor, config,
@@ -1984,12 +2068,8 @@ class VLMCornerInpainter:
                                max_tokens=80, temperature=0.0, verbose=False)
                 raw = _extract_text(out).strip()
 
-                # JSON extrahieren
-                if "```" in raw:
-                    raw = raw.split("```")[1]
-                    if raw.startswith("json"):
-                        raw = raw[4:]
-                result = _json.loads(raw.strip())
+                # JSON extrahieren – robuster via _extract_json_from_vlm
+                result = _extract_json_from_vlm(raw)
 
                 has_wm  = result.get("has_corner overlay", False)
                 corner  = result.get("corner", "none")
@@ -2003,14 +2083,19 @@ class VLMCornerInpainter:
                     print(f"[CornerInpainter] Erkannte Ecke: {detected}")
                 else:
                     detected = fallback_corners
-                    print(f"[CornerInpainter] Kein WZ erkannt → Fallback: {detected}")
-
-                os.unlink(tmp_path)
+                    print(f"[CornerInpainter] Kein Overlay erkannt → Fallback: {detected}")
 
             except Exception as e:
                 print(f"[CornerInpainter] VLM-Analyse fehlgeschlagen: {e} "
                       f"→ Fallback: {fallback_corners}")
                 detected = fallback_corners
+            finally:
+                # Temp-Datei immer aufräumen, auch bei Exception
+                if tmp_path is not None:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
         else:
             print(f"[CornerInpainter] Kein VLM → {fallback_corners}")
 
@@ -2080,6 +2165,9 @@ if HAS_VLM:
                         "tooltip": "Neu approved Bilder in approved/ verschieben.",
                     }),
                     "reload_every": ("INT", {"default": 5, "min": 1, "max": 50}),
+                    "max_tokens":   ("INT", {"default": 400, "min": 100, "max": 2000, "step": 100,
+                                    "tooltip": "Maximale Tokens pro Analyse. "
+                                               "Bei Reasoning-Modellen hoeher setzen (800-1500)."}),
                 },
             }
 
@@ -2090,7 +2178,7 @@ if HAS_VLM:
         OUTPUT_NODE  = True
 
         def review(self, vlm_model, base_folder, review_source,
-                   move_files, reload_every):
+                   move_files, reload_every, max_tokens=400):
             import json as _json
             import shutil
 
@@ -2163,7 +2251,7 @@ if HAS_VLM:
                         processor, config, CURATOR_ANALYSIS_PROMPT, num_images=1
                     )
                     out = generate(model, processor, fp, [img_path],
-                                   max_tokens=300, temperature=0.0, verbose=False)
+                                   max_tokens=max_tokens, temperature=0.0, verbose=False)
                     raw = _extract_text(out).strip()
 
                     # Nochmal Content-Policy?
@@ -2264,16 +2352,12 @@ if HAS_VLM:
         def unload(self, vlm_model):
             try:
                 model_path = vlm_model.model_path
+                # Pipeline-Objekt leeren
                 vlm_model._model     = None
                 vlm_model._processor = None
                 vlm_model._config    = None
-                import gc
-                gc.collect()
-                try:
-                    import mlx.core as mx
-                    mx.metal.clear_cache()
-                except Exception:
-                    pass
+                # Fix: globalen Cache leeren damit get() nicht neu lädt
+                _unload_vlm(model_path)
                 msg = f"[VLMModelUnloader] Modell entladen: {model_path}"
                 print(msg)
                 return (msg,)
@@ -2541,3 +2625,663 @@ if HAS_VLM:
             )
             print(f"\n[CornerBatch] Fertig: {processed} verarbeitet, {skipped} uebersprungen.")
             return (report, processed, skipped)
+
+# ===========================================================================
+# NEUE NODES – mlx-vlm 0.4.x Feature-Erweiterungen
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Node: VLMTextAnalyzer
+# Analysiert Text-Bilder (Screenshots, Dokumente, Whiteboards) und gibt
+# strukturierten Output zurück: erkannter Text + Zusammenfassung + Sprache.
+# ---------------------------------------------------------------------------
+if HAS_VLM:
+    class VLMTextAnalyzer:
+        """
+        Spezialisierter OCR + Text-Analyse Node.
+        Gibt erkannten Rohtext, eine Zusammenfassung und die erkannte Sprache aus.
+        Ideal für Screenshots, Dokumente, Whiteboards, handgeschriebene Notizen.
+        """
+
+        TEXT_PROMPTS = {
+            "Raw OCR":
+                "Read and transcribe ALL text visible in this image exactly as written. "
+                "Preserve line breaks and formatting. Output only the transcribed text, nothing else.",
+            "OCR + Summary":
+                "First transcribe all visible text exactly. Then on a new line write '---SUMMARY---' "
+                "followed by a 2-sentence summary of the content.",
+            "Document Structure":
+                "Analyze this document image. Extract: 1) All headings and subheadings, "
+                "2) Main body text, 3) Any tables or lists, 4) Footer/header text. "
+                "Use clear labels for each section.",
+            "Whiteboard / Handwriting":
+                "This is a whiteboard or handwritten note. Transcribe all text you can read, "
+                "including diagrams labels. Mark unclear words with [?]. "
+                "Note any drawn diagrams or arrows briefly.",
+            "Code Screenshot":
+                "This is a code screenshot. Transcribe the code exactly, preserving indentation. "
+                "After the code, on a new line write the detected programming language.",
+            "Table Extraction":
+                "Extract all table data from this image. Format as: "
+                "column headers on the first line separated by | , "
+                "then each data row on its own line separated by | .",
+        }
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "vlm_model": ("MLXVLM_MODEL",),
+                    "image":     ("IMAGE",),
+                    "mode": (list(VLMTextAnalyzer.TEXT_PROMPTS.keys()), {
+                        "default": "OCR + Summary",
+                        "tooltip": "Analyse-Modus. 'Raw OCR' nur Text, 'OCR + Summary' Text + Zusammenfassung.",
+                    }),
+                    "max_tokens": ("INT", {"default": 800, "min": 100, "max": 3000, "step": 100,
+                                          "tooltip": "Für lange Dokumente auf 1500-2000 erhöhen."}),
+                },
+                "optional": {
+                    "custom_prompt": ("STRING", {
+                        "multiline": True, "default": "",
+                        "tooltip": "Eigener Prompt überschreibt den Modus.",
+                    }),
+                },
+            }
+
+        RETURN_TYPES = ("STRING", "STRING")
+        RETURN_NAMES = ("text",   "summary")
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "analyze"
+
+        def analyze(self, vlm_model, image, mode, max_tokens, custom_prompt=""):
+            if not HAS_VLM:
+                raise RuntimeError("mlx-vlm is not installed.")
+
+            prompt = custom_prompt.strip() if custom_prompt and custom_prompt.strip() \
+                     else self.TEXT_PROMPTS.get(mode, self.TEXT_PROMPTS["Raw OCR"])
+
+            image_path = _tensor_to_temp_path(image)
+            try:
+                model, processor, config = vlm_model.get()
+                fp = apply_chat_template(processor, config, prompt, num_images=1)
+                output = generate(model, processor, fp, [image_path],
+                                  max_tokens=max_tokens, temperature=0.0, verbose=False)
+                full_text = _extract_text(output).strip()
+
+                # Summary aus "---SUMMARY---" Marker extrahieren wenn vorhanden
+                summary = ""
+                if "---SUMMARY---" in full_text:
+                    parts   = full_text.split("---SUMMARY---", 1)
+                    full_text = parts[0].strip()
+                    summary   = parts[1].strip()
+
+                print(f"[VLMTextAnalyzer] Mode: {mode} | {len(full_text)} chars")
+                return (full_text, summary)
+            finally:
+                try:
+                    os.unlink(image_path)
+                except Exception:
+                    pass
+
+
+# ---------------------------------------------------------------------------
+# Node: VLMImageCompare
+# Vergleicht zwei Bilder direkt (nutzt Multi-Image-Fähigkeit von Qwen2-VL).
+# Gibt einen strukturierten Vergleich mit Gemeinsamkeiten und Unterschieden aus.
+# ---------------------------------------------------------------------------
+if HAS_VLM:
+    class VLMImageCompare:
+        """
+        Vergleicht zwei Bilder mit dem VLM.
+        Nützlich für Before/After, Style-Transfer-Bewertung, Dataset-Konsistenz.
+        """
+
+        COMPARE_MODES = {
+            "General Comparison":
+                "Compare these two images in detail. Describe: "
+                "1) Key similarities, 2) Key differences, "
+                "3) Which image has better composition/quality and why.",
+            "Style Consistency":
+                "Compare the visual style of these two images. "
+                "Are they consistent in: lighting, color palette, art style, mood, quality? "
+                "Rate consistency 1-10 and explain.",
+            "Before / After":
+                "These are a before and after image. Describe what changed between them. "
+                "List all visible differences.",
+            "Dataset Quality Check":
+                "You are checking two training dataset images for consistency. "
+                "Compare: face visibility, lighting quality, background, pose category, "
+                "expression. Would both work well together in a training dataset? "
+                "Answer yes/no with reasons.",
+            "Prompt Faithfulness":
+                "Image 1 is the reference, Image 2 is a generated result. "
+                "How faithfully does Image 2 reproduce the content of Image 1? "
+                "Rate 1-10 and list what matches and what differs.",
+        }
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "vlm_model": ("MLXVLM_MODEL",),
+                    "image_a":   ("IMAGE",),
+                    "image_b":   ("IMAGE",),
+                    "mode": (list(VLMImageCompare.COMPARE_MODES.keys()), {
+                        "default": "General Comparison",
+                    }),
+                    "max_tokens": ("INT", {"default": 500, "min": 100, "max": 2000, "step": 50}),
+                },
+                "optional": {
+                    "custom_prompt": ("STRING", {"multiline": True, "default": ""}),
+                },
+            }
+
+        RETURN_TYPES = ("STRING",)
+        RETURN_NAMES = ("comparison",)
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "compare"
+
+        def compare(self, vlm_model, image_a, image_b, mode, max_tokens, custom_prompt=""):
+            if not HAS_VLM:
+                raise RuntimeError("mlx-vlm is not installed.")
+
+            prompt = custom_prompt.strip() if custom_prompt and custom_prompt.strip() \
+                     else self.COMPARE_MODES.get(mode, self.COMPARE_MODES["General Comparison"])
+
+            path_a = _tensor_to_temp_path(image_a)
+            path_b = _tensor_to_temp_path(image_b)
+            try:
+                model, processor, config = vlm_model.get()
+                fp = apply_chat_template(processor, config, prompt, num_images=2)
+                output = generate(model, processor, fp, [path_a, path_b],
+                                  max_tokens=max_tokens, temperature=0.0, verbose=False)
+                result = _extract_text(output).strip()
+                print(f"[VLMImageCompare] Mode: {mode} | {len(result)} chars")
+                return (result,)
+            finally:
+                for p in [path_a, path_b]:
+                    try:
+                        os.unlink(p)
+                    except Exception:
+                        pass
+
+
+# ---------------------------------------------------------------------------
+# Node: VLMQualityScorer
+# Bewertet ein Bild auf Qualitätsmerkmale und gibt einen Score + Report aus.
+# Nützlich zum Filtern von Datasets, Batch-Bewertung vor dem Training.
+# ---------------------------------------------------------------------------
+if HAS_VLM:
+    class VLMQualityScorer:
+        """
+        Bewertet Bilder auf technische und ästhetische Qualität.
+        Gibt einen Score 0-100 und einen Report zurück.
+        Kann als Filter in Batch-Workflows eingesetzt werden.
+        """
+
+        SCORE_PROMPTS = {
+            "Portrait Training":
+                "Rate this portrait image for AI training dataset quality. "
+                "Evaluate: face sharpness (0-30), lighting quality (0-20), "
+                "expression clarity (0-20), background cleanliness (0-15), "
+                "framing and composition (0-15). "
+                "Respond with ONLY JSON: "
+                '{{"score": <0-100>, "sharpness": <0-30>, "lighting": <0-20>, '
+                '"expression": <0-20>, "background": <0-15>, "composition": <0-15>, '
+                '"verdict": "excellent|good|acceptable|poor", '
+                '"main_issue": "<one short phrase or null>"}}',
+            "General Photo Quality":
+                "Rate this photograph on technical and aesthetic quality. "
+                "Consider: sharpness, exposure, composition, color, subject clarity. "
+                "Respond with ONLY JSON: "
+                '{{"score": <0-100>, "sharpness": "sharp|soft|blurry", '
+                '"exposure": "correct|over|under", "composition": "excellent|good|poor", '
+                '"verdict": "excellent|good|acceptable|poor", '
+                '"main_issue": "<one short phrase or null>"}}',
+            "AI Generation Quality":
+                "Rate this AI-generated image on quality. "
+                "Look for: anatomical correctness, artifact-free rendering, "
+                "prompt adherence impression, overall realism. "
+                "Respond with ONLY JSON: "
+                '{{"score": <0-100>, "artifacts": "none|minor|major", '
+                '"anatomy": "correct|minor_issues|major_issues", '
+                '"verdict": "excellent|good|acceptable|poor", '
+                '"main_issue": "<one short phrase or null>"}}',
+        }
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "vlm_model": ("MLXVLM_MODEL",),
+                    "image":     ("IMAGE",),
+                    "mode": (list(VLMQualityScorer.SCORE_PROMPTS.keys()), {
+                        "default": "Portrait Training",
+                    }),
+                    "pass_threshold": ("INT", {
+                        "default": 60, "min": 0, "max": 100,
+                        "tooltip": "Bilder mit Score >= threshold gelten als 'passed'.",
+                    }),
+                },
+            }
+
+        RETURN_TYPES = ("INT",     "STRING",  "BOOLEAN", "IMAGE")
+        RETURN_NAMES = ("score",   "report",  "passed",  "image")
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "score"
+
+        def score(self, vlm_model, image, mode, pass_threshold):
+            if not HAS_VLM:
+                raise RuntimeError("mlx-vlm is not installed.")
+
+            prompt = self.SCORE_PROMPTS.get(mode, self.SCORE_PROMPTS["General Photo Quality"])
+            image_path = _tensor_to_temp_path(image)
+            try:
+                model, processor, config = vlm_model.get()
+                fp = apply_chat_template(processor, config, prompt, num_images=1)
+                output = generate(model, processor, fp, [image_path],
+                                  max_tokens=300, temperature=0.0, verbose=False)
+                raw = _extract_text(output).strip()
+
+                try:
+                    data    = _extract_json_from_vlm(raw)
+                    score_v = int(data.get("score", 50))
+                    verdict = data.get("verdict", "unknown")
+                    issue   = data.get("main_issue") or "none"
+                    report  = (
+                        f"Score: {score_v}/100 | Verdict: {verdict}\n"
+                        f"Main issue: {issue}\n"
+                        + "\n".join(f"  {k}: {v}" for k, v in data.items()
+                                    if k not in ("score", "verdict", "main_issue"))
+                    )
+                except Exception:
+                    score_v = 50
+                    report  = f"Parse error. Raw: {raw[:200]}"
+
+                passed = score_v >= pass_threshold
+                status = "✓ PASS" if passed else "✗ FAIL"
+                print(f"[VLMQualityScorer] {status} | Score: {score_v} | {mode}")
+                return (score_v, report, passed, image)
+            finally:
+                try:
+                    os.unlink(image_path)
+                except Exception:
+                    pass
+
+
+# ---------------------------------------------------------------------------
+# Node: VLMBatchQualityFilter
+# Scannt einen Ordner, bewertet jedes Bild mit VLM und
+# verschiebt gute/schlechte Bilder automatisch in Unterordner.
+# ---------------------------------------------------------------------------
+if HAS_VLM:
+    class VLMBatchQualityFilter:
+        """
+        Batch-Version des VLMQualityScorer.
+        Scannt einen Ordner und sortiert Bilder in passed/ und failed/ Unterordner.
+        Ideal vor dem Dataset Curator als erster Qualitäts-Filter.
+        """
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "vlm_model":      ("MLXVLM_MODEL",),
+                    "image_folder":   ("STRING", {"default": "/path/to/images"}),
+                    "mode": (list(VLMQualityScorer.SCORE_PROMPTS.keys()), {
+                        "default": "Portrait Training",
+                    }),
+                    "pass_threshold": ("INT", {
+                        "default": 60, "min": 0, "max": 100,
+                        "tooltip": "Score >= threshold → passed/. Darunter → failed/.",
+                    }),
+                    "move_files":  ("BOOLEAN", {
+                        "default": True, "label_on": "True", "label_off": "False",
+                    }),
+                    "overwrite":   ("BOOLEAN", {
+                        "default": False, "label_on": "True", "label_off": "False",
+                        "tooltip": "Bereits bewertete Bilder (vorhandene .json) erneut analysieren.",
+                    }),
+                    "reload_every": ("INT", {
+                        "default": 10, "min": 1, "max": 100,
+                    }),
+                },
+            }
+
+        RETURN_TYPES = ("STRING", "INT", "INT", "INT")
+        RETURN_NAMES = ("report", "total", "passed", "failed")
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "run"
+        OUTPUT_NODE  = True
+
+        def run(self, vlm_model, image_folder, mode, pass_threshold,
+                move_files, overwrite, reload_every):
+            import shutil
+
+            folder = os.path.expanduser(image_folder.strip())
+            if not os.path.isdir(folder):
+                raise ValueError(f"[BatchQFilter] Ordner nicht gefunden: {folder}")
+
+            passed_dir  = os.path.join(folder, "passed")
+            failed_dir  = os.path.join(folder, "failed")
+            scores_dir  = os.path.join(folder, ".scores")
+            for d in [passed_dir, failed_dir, scores_dir]:
+                os.makedirs(d, exist_ok=True)
+
+            image_files = sorted([
+                f for f in os.listdir(folder)
+                if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
+                and not os.path.splitext(f)[0].lower().startswith("preview")
+            ])
+            if not image_files:
+                raise ValueError(f"[BatchQFilter] Keine Bilder in: {folder}")
+
+            prompt = VLMQualityScorer.SCORE_PROMPTS.get(
+                mode, VLMQualityScorer.SCORE_PROMPTS["General Photo Quality"])
+
+            model, processor, config = vlm_model.get()
+            results      = []
+            passed_count = 0
+            failed_count = 0
+            since_reload = 0
+
+            for i, fname in enumerate(image_files, 1):
+                img_path   = os.path.join(folder, fname)
+                base       = os.path.splitext(fname)[0]
+                score_path = os.path.join(scores_dir, base + ".json")
+
+                # Cache prüfen
+                if os.path.exists(score_path) and not overwrite:
+                    with open(score_path) as f:
+                        cached = _json.load(f)
+                    score_v = cached.get("score", 50)
+                    verdict = cached.get("verdict", "?")
+                    print(f"[BatchQFilter] [{i}/{len(image_files)}] {fname} "
+                          f"(gecacht: {score_v})")
+                else:
+                    print(f"[BatchQFilter] [{i}/{len(image_files)}] {fname}")
+
+                    if since_reload > 0 and since_reload % reload_every == 0:
+                        vlm_model._model = None
+                        model, processor, config = vlm_model.get()
+
+                    try:
+                        fp  = apply_chat_template(processor, config, prompt, num_images=1)
+                        out = generate(model, processor, fp, [img_path],
+                                       max_tokens=200, temperature=0.0, verbose=False)
+                        raw     = _extract_text(out).strip()
+                        data    = _extract_json_from_vlm(raw)
+                        score_v = int(data.get("score", 50))
+                        verdict = data.get("verdict", "unknown")
+                        with open(score_path, "w") as f:
+                            _json.dump({"score": score_v, "verdict": verdict,
+                                        "filename": fname, **data}, f, indent=2)
+                        since_reload += 1
+                    except Exception as e:
+                        print(f"[BatchQFilter] FEHLER bei {fname}: {e}")
+                        score_v = 0
+                        verdict = "error"
+
+                passed = score_v >= pass_threshold
+                status = "✓" if passed else "✗"
+                print(f"[BatchQFilter]   {status} {score_v:3d} | {verdict}")
+                results.append(f"{status} {score_v:3d}  {fname}")
+
+                if passed:
+                    passed_count += 1
+                    if move_files:
+                        dst = os.path.join(passed_dir, fname)
+                        if os.path.exists(img_path) and img_path != dst:
+                            shutil.move(img_path, dst)
+                else:
+                    failed_count += 1
+                    if move_files:
+                        dst = os.path.join(failed_dir, fname)
+                        if os.path.exists(img_path) and img_path != dst:
+                            shutil.move(img_path, dst)
+
+            report = (
+                f"Batch Quality Filter ({mode})\n"
+                f"Threshold: {pass_threshold} | Total: {len(image_files)} | "
+                f"Passed: {passed_count} | Failed: {failed_count}\n\n"
+                + "\n".join(results[:40])
+                + ("\n..." if len(results) > 40 else "")
+            )
+            print(f"\n[BatchQFilter] Fertig: {passed_count} passed, {failed_count} failed.")
+            return (report, len(image_files), passed_count, failed_count)
+
+
+# ---------------------------------------------------------------------------
+# Node: VLMFaceDetector
+# Erkennt Gesichter/Personen im Bild und gibt Metadaten zurück.
+# Gibt auch einen BOOLEAN aus ob überhaupt eine Person sichtbar ist –
+# ideal als Filter-Gate in automatisierten Workflows.
+# ---------------------------------------------------------------------------
+if HAS_VLM:
+    class VLMFaceDetector:
+        """
+        Prüft ob eine Person / ein Gesicht im Bild sichtbar ist.
+        Gibt BOOLEAN aus → kann als IF-Condition in ComfyUI-Workflows genutzt werden.
+        Auch nützlich um person_count und face_quality schnell zu ermitteln.
+        """
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "vlm_model": ("MLXVLM_MODEL",),
+                    "image":     ("IMAGE",),
+                    "require_face_visible": ("BOOLEAN", {
+                        "default": True,
+                        "label_on": "True", "label_off": "False",
+                        "tooltip": "True = face_visible muss True sein. "
+                                   "False = person_count >= 1 reicht.",
+                    }),
+                    "min_face_quality": (["any", "sharp", "sharp_or_soft"], {
+                        "default": "any",
+                        "tooltip": "Mindest-Bildqualität des Gesichts für passed=True.",
+                    }),
+                },
+            }
+
+        RETURN_TYPES = ("BOOLEAN", "INT",          "STRING",       "STRING",     "IMAGE")
+        RETURN_NAMES = ("passed",  "person_count", "face_quality", "category",   "image")
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "detect"
+
+        DETECT_PROMPT = (
+            "Analyze this image for people and faces. "
+            "Respond with ONLY JSON (no other text): "
+            '{"person_count": <int>, "face_visible": <bool>, '
+            '"face_quality": "sharp|soft|blurry|not_visible", '
+            '"category": "close_up|upper_body|full_body|back_side|no_person"}'
+        )
+
+        def detect(self, vlm_model, image, require_face_visible, min_face_quality):
+            if not HAS_VLM:
+                raise RuntimeError("mlx-vlm is not installed.")
+
+            image_path = _tensor_to_temp_path(image)
+            try:
+                model, processor, config = vlm_model.get()
+                fp  = apply_chat_template(processor, config, self.DETECT_PROMPT, num_images=1)
+                out = generate(model, processor, fp, [image_path],
+                               max_tokens=120, temperature=0.0, verbose=False)
+                raw = _extract_text(out).strip()
+
+                try:
+                    data         = _extract_json_from_vlm(raw)
+                    person_count = int(data.get("person_count", 0))
+                    face_visible = bool(data.get("face_visible", False))
+                    face_quality = data.get("face_quality", "not_visible")
+                    category     = data.get("category", "unknown")
+                except Exception:
+                    person_count = 0
+                    face_visible = False
+                    face_quality = "not_visible"
+                    category     = "unknown"
+
+                # Passed-Logik
+                has_person = person_count >= 1
+                face_ok    = face_visible if require_face_visible else has_person
+                quality_ok = True
+                if min_face_quality == "sharp":
+                    quality_ok = face_quality == "sharp"
+                elif min_face_quality == "sharp_or_soft":
+                    quality_ok = face_quality in ("sharp", "soft")
+
+                passed = has_person and face_ok and quality_ok
+                status = "✓" if passed else "✗"
+                print(f"[VLMFaceDetector] {status} persons={person_count} "
+                      f"face={face_visible} quality={face_quality} cat={category}")
+                return (passed, person_count, face_quality, category, image)
+            finally:
+                try:
+                    os.unlink(image_path)
+                except Exception:
+                    pass
+
+
+# ---------------------------------------------------------------------------
+# Node: VLMCaptionRefiner
+# Nimmt eine rohe VLM-Caption und verfeinert/reformatiert sie mit einem
+# zweiten VLM-Pass – z.B. kürzen, SD-Stil, FLUX-Stil, oder Tag-Liste.
+# ---------------------------------------------------------------------------
+if HAS_VLM:
+    class VLMCaptionRefiner:
+        """
+        Verfeinert eine bestehende Caption für verschiedene Verwendungszwecke.
+        Nützlich nach MfluxVLMRun um den Output weiter zu formatieren.
+        Kein Bild nötig – arbeitet nur mit Text.
+        """
+
+        REFINE_MODES = {
+            "Shorten to 50 words":
+                "Shorten this image caption to maximum 50 words. "
+                "Keep the most important subject, action, and style information. "
+                "Output only the shortened caption.",
+            "Convert to SD tags":
+                "Convert this image description to Stable Diffusion prompt tags. "
+                "Output comma-separated keywords only, ordered by importance. "
+                "Add quality tags at the end: photorealistic, sharp focus, high detail.",
+            "Convert to FLUX style":
+                "Convert this image description into a FLUX-optimized generation prompt. "
+                "Write as a single descriptive paragraph with natural language. "
+                "Be specific about lighting, colors, and mood. No quality tags.",
+            "Add trigger token":
+                "I will give you an image caption and a trigger token. "
+                "Prepend the trigger token to the caption with a comma and space. "
+                "Output only the modified caption.",
+            "Remove background details":
+                "Edit this image caption to remove all background descriptions. "
+                "Keep only subject, clothing, expression, and pose. "
+                "Output only the edited caption.",
+            "Translate to English":
+                "Translate this image caption to English if it is not already in English. "
+                "If it is already English, output it unchanged.",
+        }
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "vlm_model":  ("MLXVLM_MODEL",),
+                    "caption_in": ("STRING", {
+                        "multiline": True, "default": "",
+                        "tooltip": "Die zu verfeinernde Caption (Output von MfluxVLMRun).",
+                    }),
+                    "mode": (list(VLMCaptionRefiner.REFINE_MODES.keys()), {
+                        "default": "Shorten to 50 words",
+                    }),
+                    "max_tokens": ("INT", {"default": 300, "min": 50, "max": 1000, "step": 50}),
+                },
+                "optional": {
+                    "trigger_token": ("STRING", {
+                        "default": "",
+                        "tooltip": "Nur für 'Add trigger token' Modus.",
+                    }),
+                },
+            }
+
+        RETURN_TYPES = ("STRING",)
+        RETURN_NAMES = ("caption_out",)
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "refine"
+
+        def refine(self, vlm_model, caption_in, mode, max_tokens, trigger_token=""):
+            if not HAS_VLM:
+                raise RuntimeError("mlx-vlm is not installed.")
+            if not caption_in or not caption_in.strip():
+                return ("",)
+
+            base_prompt = self.REFINE_MODES.get(mode, self.REFINE_MODES["Shorten to 50 words"])
+
+            if mode == "Add trigger token" and trigger_token.strip():
+                prompt = (f"Trigger token: '{trigger_token.strip()}'\n"
+                          f"Caption: {caption_in.strip()}\n\n"
+                          + base_prompt)
+            else:
+                prompt = f"{base_prompt}\n\nCaption to process:\n{caption_in.strip()}"
+
+            # VLMCaptionRefiner arbeitet ohne Bild – wir erstellen ein Dummy-Bild
+            dummy = _PILImage.new("RGB", (64, 64), color=(128, 128, 128))
+            tmp   = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+            dummy.save(tmp_path)
+
+            try:
+                model, processor, config = vlm_model.get()
+                fp  = apply_chat_template(processor, config, prompt, num_images=1)
+                out = generate(model, processor, fp, [tmp_path],
+                               max_tokens=max_tokens, temperature=0.0, verbose=False)
+                result = _extract_text(out).strip()
+                print(f"[VLMCaptionRefiner] Mode: {mode} | {len(result)} chars")
+                return (result,)
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+
+# ---------------------------------------------------------------------------
+# Node: VLMModelInfo
+# Zeigt Info über das geladene Modell: Name, gecacht?, is_florence2
+# Gibt auch den Modellnamen als STRING aus (für dynamische Dateinamen etc.)
+# ---------------------------------------------------------------------------
+if HAS_VLM:
+    class VLMModelInfo:
+        """
+        Zeigt Informationen über das geladene VLM-Modell.
+        Nützlich zum Debuggen und für dynamische Dateinamen in Workflows.
+        """
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {
+                    "vlm_model": ("MLXVLM_MODEL",),
+                },
+            }
+
+        RETURN_TYPES = ("STRING",  "STRING",     "BOOLEAN")
+        RETURN_NAMES = ("model_name", "model_short_name", "is_florence2")
+        CATEGORY     = "MFlux/VLM"
+        FUNCTION     = "info"
+        OUTPUT_NODE  = True
+
+        def info(self, vlm_model):
+            model_path  = vlm_model.model_path
+            short_name  = model_path.split("/")[-1]
+            is_florence = vlm_model.is_florence2
+            cached      = model_path in _vlm_cache
+
+            info_str = (
+                f"Model:      {model_path}\n"
+                f"Short name: {short_name}\n"
+                f"Florence2:  {is_florence}\n"
+                f"Cached:     {cached}"
+            )
+            print(f"[VLMModelInfo]\n{info_str}")
+            return (model_path, short_name, is_florence)

@@ -43,7 +43,7 @@
         {"name": "caption", "type": "STRING", "links": [3], "slot_index": 0}
       ],
       "properties": {"Node name for S&R": "MfluxVLMRun"},
-      "widgets_values": ["more_detailed_caption", "Detailed Caption (for img2img)", 300, 0.0, ""]
+      "widgets_values": ["more_detailed_caption", "Caption · Detailed", 300, 0.0, ""]
     },
     {
       "id": 4,

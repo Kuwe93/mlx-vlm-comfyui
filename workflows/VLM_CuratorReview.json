@@ -16,9 +16,9 @@
       "flags": {},
       "order": 0,
       "mode": 0,
-      "title": "Anleitung – Zweiter Pass",
+      "title": "Anleitung \u2013 Zweiter Pass",
       "widgets_values": [
-        "Curator Second Pass\n\n1. Erst VLMDatasetCurator laufen lassen (erster Pass)\n2. VLMModelUnloader entlädt Qwen komplett aus dem RAM\n3. Zweites VLM (z.B. SmolVLM2) lädt und re-analysiert\n   nur die needs_review/ oder rejected/ Bilder\n4. Neu approved Bilder wandern automatisch in approved/"
+        "Curator Second Pass\n\n1. Erst VLMDatasetCurator laufen lassen (erster Pass)\n2. VLMModelUnloader entl\u00e4dt Qwen komplett aus dem RAM\n3. Zweites VLM (z.B. SmolVLM2) l\u00e4dt und re-analysiert\n   nur die needs_review/ oder rejected/ Bilder\n4. Neu approved Bilder wandern automatisch in approved/"
       ],
       "inputs": [],
       "outputs": [],
@@ -148,7 +148,7 @@
         {
           "name": "vlm_model",
           "type": "MLXVLM_MODEL",
-          "link": 2,
+          "link": 5,
           "slot_index": 0
         }
       ],
@@ -274,6 +274,14 @@
       5,
       0,
       6,
+      0,
+      "MLXVLM_MODEL"
+    ],
+    [
+      5,
+      2,
+      0,
+      4,
       0,
       "MLXVLM_MODEL"
     ]

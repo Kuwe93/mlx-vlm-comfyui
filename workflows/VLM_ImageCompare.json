@@ -10,38 +10,118 @@
         20
       ],
       "size": [
-        680,
-        120
+        500,
+        90
       ],
       "flags": {},
       "order": 0,
       "mode": 0,
       "title": "Anleitung",
       "widgets_values": [
-        "VLM Prompt Builder Workflow\n\n1. VLMPromptBuilder: Preset wählen und optional extra_instruction ergänzen\n2. Der Prompt-Text landet im String-Node wo du ihn direkt editieren kannst\n3. Editierter Text geht als text_input in MfluxVLMRun\n4. preset im VLMRun Node auf 'Custom (nur text_input)' lassen damit text_input Priorität hat"
+        "VLM Image Compare\n\nVergleicht zwei Bilder direkt. Modi: General, Style Consistency,\nBefore/After, Dataset Quality Check, Prompt Faithfulness.\nBen\u00f6tigt Modell mit Multi-Image-Support (Qwen2-VL oder Qwen2.5-VL)."
       ],
       "inputs": [],
       "outputs": [],
       "properties": {},
-      "color": "#1a1a3a",
-      "bgcolor": "#1a1a3a"
+      "color": "#2a1a3a",
+      "bgcolor": "#2a1a3a"
     },
     {
       "id": 2,
-      "type": "MfluxVLMLoader",
+      "type": "LoadImage",
       "pos": [
         20,
-        160
+        140
       ],
       "size": [
-        360,
-        100
+        280,
+        280
       ],
       "flags": {},
       "order": 1,
       "mode": 0,
+      "title": "Bild A",
       "widgets_values": [
-        "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+        "image_a.png",
+        "image"
+      ],
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1
+          ],
+          "shape": 3
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "shape": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      }
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [
+        20,
+        450
+      ],
+      "size": [
+        280,
+        280
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "title": "Bild B",
+      "widgets_values": [
+        "image_b.png",
+        "image"
+      ],
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            2
+          ],
+          "shape": 3
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "shape": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      }
+    },
+    {
+      "id": 4,
+      "type": "MfluxVLMLoader",
+      "pos": [
+        20,
+        760
+      ],
+      "size": [
+        280,
+        80
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "widgets_values": [
+        "mlx-community/Qwen2-VL-2B-Instruct-4bit",
         ""
       ],
       "inputs": [],
@@ -60,103 +140,23 @@
       }
     },
     {
-      "id": 3,
-      "type": "VLMPromptBuilder",
+      "id": 5,
+      "type": "VLMImageCompare",
       "pos": [
-        20,
-        280
-      ],
-      "size": [
-        380,
-        180
-      ],
-      "flags": {},
-      "order": 2,
-      "mode": 0,
-      "title": "Prompt Builder",
-      "widgets_values": [
-        "Z-Image · Single Person Portrait",
-        "Focus only on the person, ignore the background."
-      ],
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "prompt_text",
-          "type": "STRING",
-          "links": [
-            1
-          ],
-          "slot_index": 0
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "VLMPromptBuilder"
-      }
-    },
-    {
-      "id": 4,
-      "type": "PrimitiveNode",
-      "pos": [
-        430,
+        350,
         280
       ],
       "size": [
         420,
-        100
-      ],
-      "flags": {},
-      "order": 3,
-      "mode": 0,
-      "title": "Prompt Text (editierbar)",
-      "outputs": [
-        {
-          "name": "STRING",
-          "type": "STRING",
-          "links": [
-            2
-          ],
-          "widget": {
-            "name": "value"
-          },
-          "slot_index": 0
-        }
-      ],
-      "inputs": [
-        {
-          "name": "value",
-          "type": "STRING",
-          "link": 1,
-          "widget": {
-            "name": "value"
-          }
-        }
-      ],
-      "widgets_values": [
-        ""
-      ],
-      "properties": {}
-    },
-    {
-      "id": 5,
-      "type": "MfluxVLMRun",
-      "pos": [
-        20,
-        490
-      ],
-      "size": [
-        500,
-        400
+        280
       ],
       "flags": {},
       "order": 4,
       "mode": 0,
-      "title": "VLM Run",
+      "title": "Image Compare",
       "widgets_values": [
-        "more_detailed_caption",
-        "Custom (nur text_input)",
+        "General Comparison",
         500,
-        0.0,
-        "",
         ""
       ],
       "inputs": [
@@ -167,21 +167,21 @@
           "slot_index": 0
         },
         {
-          "name": "image",
+          "name": "image_a",
           "type": "IMAGE",
-          "link": null,
+          "link": 1,
           "slot_index": 1
         },
         {
-          "name": "text_input",
-          "type": "STRING",
+          "name": "image_b",
+          "type": "IMAGE",
           "link": 2,
           "slot_index": 2
         }
       ],
       "outputs": [
         {
-          "name": "caption",
+          "name": "comparison",
           "type": "STRING",
           "links": [
             4
@@ -190,30 +190,30 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "MfluxVLMRun"
+        "Node name for S&R": "VLMImageCompare"
       }
     }
   ],
   "links": [
     [
       1,
-      3,
+      2,
       0,
-      4,
-      0,
-      "STRING"
+      5,
+      1,
+      "IMAGE"
     ],
     [
       2,
-      4,
+      3,
       0,
       5,
       2,
-      "STRING"
+      "IMAGE"
     ],
     [
       3,
-      2,
+      4,
       0,
       5,
       0,
